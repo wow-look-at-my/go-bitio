@@ -2,20 +2,23 @@ package bitio
 
 import (
 	"bytes"
+
+	"os"
 	"testing"
+
 	"github.com/wow-look-at-my/testify/assert"
 	"github.com/wow-look-at-my/testify/require"
 )
 
 func TestPosition(t *testing.T) {
 	t.Run("NewPosition normalizes", func(t *testing.T) {
-		p := NewPosition(1, 10) // 10 bits = 1 byte + 2 bits
+		p := NewPosition(1, 10)	// 10 bits = 1 byte + 2 bits
 		assert.Equal(t, uint64(2), p.Bytes())
 		assert.Equal(t, uint8(2), p.Bits())
 	})
 
 	t.Run("FromBits", func(t *testing.T) {
-		p := FromBits(19) // 2 bytes + 3 bits
+		p := FromBits(19)	// 2 bytes + 3 bits
 		assert.Equal(t, uint64(2), p.Bytes())
 		assert.Equal(t, uint8(3), p.Bits())
 	})
@@ -57,7 +60,7 @@ func TestReaderBasic(t *testing.T) {
 	t.Run("ReadUint8 partial", func(t *testing.T) {
 		// Position is now at byte 1
 		// 0xCD = 1100 1101
-		val, err := r.ReadUint8(4) // Should read 1101 = 0x0D
+		val, err := r.ReadUint8(4)	// Should read 1101 = 0x0D
 		require.Nil(t, err)
 		assert.Equal(t, uint8(0x0D), val)
 	})
@@ -80,13 +83,13 @@ func TestReaderBitAligned(t *testing.T) {
 
 	t.Run("Read 3 bits", func(t *testing.T) {
 		r := NewReader(data)
-		val, _ := r.ReadUint8(3) // 100 = 4
+		val, _ := r.ReadUint8(3)	// 100 = 4
 		assert.Equal(t, uint8(4), val)
 	})
 
 	t.Run("Read 5 bits then 6 bits", func(t *testing.T) {
 		r := NewReader(data)
-		v1, _ := r.ReadUint8(5) // 10100 = 20
+		v1, _ := r.ReadUint8(5)	// 10100 = 20
 		assert.Equal(t, uint8(20), v1)
 
 		// After reading 5 bits, we're at bit 5
@@ -215,7 +218,7 @@ func TestReadUint64(t *testing.T) {
 
 	t.Run("Unaligned 64 bits", func(t *testing.T) {
 		r := NewReader(data)
-		r.ReadUint8(4) // Offset by 4 bits
+		r.ReadUint8(4)	// Offset by 4 bits
 		val, err := r.ReadUint64(64)
 		require.Nil(t, err)
 		// After shifting right 4 bits and reading across 9 bytes
@@ -250,7 +253,7 @@ func TestReadStringN(t *testing.T) {
 	r := w.ToReader()
 	s, err := r.ReadStringN(5)
 	require.Nil(t, err)
-	assert.Equal(t, "hello", s) // Reads up to 5 chars before stopping
+	assert.Equal(t, "hello", s)	// Reads up to 5 chars before stopping
 }
 
 func TestReadBytes(t *testing.T) {
@@ -324,8 +327,8 @@ func TestWriteFromReader(t *testing.T) {
 
 func TestPadToByte(t *testing.T) {
 	w := NewWriterAutoGrow()
-	w.WriteUint8(0x07, 3) // Write 3 bits
-	w.PadToByte()         // Should write 5 zero bits
+	w.WriteUint8(0x07, 3)	// Write 3 bits
+	w.PadToByte()		// Should write 5 zero bits
 
 	assert.Equal(t, FromBits(8), w.Length())
 	assert.Equal(t, []byte{0x07}, w.Data())
@@ -386,7 +389,7 @@ func TestPositionComparisons(t *testing.T) {
 
 	// Test Mul
 	d := NewPosition(1, 2).Mul(3)
-	assert.Equal(t, uint64(30), d.TotalBits()) // (8+2)*3 = 30
+	assert.Equal(t, uint64(30), d.TotalBits())	// (8+2)*3 = 30
 }
 
 func TestPositionHelpers(t *testing.T) {
@@ -518,7 +521,7 @@ func TestWriteVarint(t *testing.T) {
 
 func TestWriteStringN(t *testing.T) {
 	w := NewWriterAutoGrow()
-	w.WriteStringN("hello world", 6) // Should write "hello\0"
+	w.WriteStringN("hello world", 6)	// Should write "hello\0"
 
 	r := w.ToReader()
 	s, _ := r.ReadString()
@@ -527,12 +530,12 @@ func TestWriteStringN(t *testing.T) {
 
 func TestWriteBytes(t *testing.T) {
 	w := NewWriterAutoGrow()
-	w.WriteUint8(0x0F, 4) // Misalign
+	w.WriteUint8(0x0F, 4)	// Misalign
 	w.WriteBytes([]byte{0xAB, 0xCD})
 
 	// Should still work despite misalignment
 	r := w.ToReader()
-	r.ReadUint8(4) // Skip the first 4 bits
+	r.ReadUint8(4)	// Skip the first 4 bits
 	b1, _ := r.ReadUint8(8)
 	b2, _ := r.ReadUint8(8)
 	assert.Equal(t, uint8(0xAB), b1)
@@ -588,56 +591,65 @@ func TestWriterErrorCases(t *testing.T) {
 	assert.NotNil(t, err)
 }
 
-func BenchmarkReadUint32(b *testing.B) {
-	data := make([]byte, 1024)
-	for i := range data {
-		data[i] = byte(i)
-	}
+// BenchmarkRead reads bench_stream.bin (same as C++ benchmark)
+func BenchmarkRead(b *testing.B) {
+	data, err := os.ReadFile("testdata/bench_stream.bin")
+	require.Nil(b, err)
 
-	b.Run("Aligned", func(b *testing.B) {
-		r := NewReader(data)
+	const (
+		TypeUint8	= 0
+		TypeUint16	= 1
+		TypeUint32	= 2
+		TypeUint64	= 3
+		TypeString	= 4
+		TypeFloat32	= 5
+		TypeFloat64	= 6
+		TypeVaruint	= 7
+	)
+
+	b.Run("Mixed", func(b *testing.B) {
+		var sink uint64
+		b.SetBytes(int64(len(data)))
 		b.ResetTimer()
+
 		for i := 0; i < b.N; i++ {
-			r.pos = Zero
-			for j := 0; j < 256; j++ {
-				r.ReadUint32(32)
+			r := NewReader(data)
+
+			for r.Remaining().TotalBits() > 64 {
+				typeTag, _ := r.ReadUint8(3)
+
+				switch typeTag {
+				case TypeUint8:
+					bitCount, _ := r.ReadUint8(4)
+					val, _ := r.ReadUint8(bitCount)
+					sink += uint64(val)
+				case TypeUint16:
+					bitCount, _ := r.ReadUint8(5)
+					val, _ := r.ReadUint16(bitCount)
+					sink += uint64(val)
+				case TypeUint32:
+					bitCount, _ := r.ReadUint8(6)
+					val, _ := r.ReadUint32(bitCount)
+					sink += uint64(val)
+				case TypeUint64:
+					bitCount, _ := r.ReadUint8(7)
+					val, _ := r.ReadUint64(bitCount)
+					sink += val
+				case TypeString:
+					s, _ := r.ReadString()
+					sink += uint64(len(s))
+				case TypeFloat32:
+					val, _ := r.ReadFloat32()
+					sink += uint64(val)
+				case TypeFloat64:
+					val, _ := r.ReadFloat64()
+					sink += uint64(val)
+				case TypeVaruint:
+					val, _ := r.ReadVarint()
+					sink += uint64(val)
+				}
 			}
 		}
-	})
-
-	b.Run("Unaligned", func(b *testing.B) {
-		r := NewReader(data)
-		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
-			r.pos = FromBits(3)	// Start at bit 3
-			for j := 0; j < 200; j++ {
-				r.ReadUint32(32)
-			}
-		}
-	})
-}
-
-func BenchmarkWriteUint32(b *testing.B) {
-	b.Run("Aligned", func(b *testing.B) {
-		w := NewWriterSize(4096)
-		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
-			w.Reset()
-			for j := 0; j < 256; j++ {
-				w.WriteUint32(0xDEADBEEF, 32)
-			}
-		}
-	})
-
-	b.Run("Unaligned", func(b *testing.B) {
-		w := NewWriterSize(4096)
-		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
-			w.Reset()
-			w.WriteUint8(0, 3)	// Misalign by 3 bits
-			for j := 0; j < 200; j++ {
-				w.WriteUint32(0xDEADBEEF, 32)
-			}
-		}
+		_ = sink
 	})
 }
