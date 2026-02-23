@@ -663,240 +663,71 @@ func (r *Reader) peekBytesZeroPad(n int) []byte {
 	return buf
 }
 
-// Peek8 returns up to 8 bits left-aligned in a uint8, zero-padded at EOF.
-// Does not advance position. Does not return an error.
-func (r *Reader) Peek8() uint8 {
+// peekLeftAligned returns up to maxBits left-aligned, zero-padded at EOF.
+func (r *Reader) peekLeftAligned(maxBits uint8) uint64 {
 	remaining := r.end.Diff(r.pos)
 	if remaining == 0 {
 		return 0
 	}
-	bits := uint8(8)
-	if remaining.TotalBits() < 8 {
+	bits := maxBits
+	if remaining.TotalBits() < uint64(maxBits) {
 		bits = uint8(remaining.TotalBits())
 	}
-
-	buf := r.peekBytesZeroPad(2)
-	bitOff := r.pos.Bits()
-	var val uint8
-
-	if r.msbFirst {
-		raw := uint16(buf[0])<<8 | uint16(buf[1])
-		val = uint8(raw >> (8 - bitOff))
-	} else {
-		raw := uint16(buf[0]) | uint16(buf[1])<<8
-		val = uint8((raw >> bitOff) & 0xFF)
-		// Left-align the value
-		val <<= (8 - bits)
-	}
-
-	return val
-}
-
-// Peek16 returns up to 16 bits left-aligned in a uint16, zero-padded at EOF.
-// Does not advance position. Does not return an error.
-func (r *Reader) Peek16() uint16 {
-	remaining := r.end.Diff(r.pos)
-	if remaining == 0 {
-		return 0
-	}
-	bits := uint8(16)
-	if remaining.TotalBits() < 16 {
-		bits = uint8(remaining.TotalBits())
-	}
-
-	buf := r.peekBytesZeroPad(3)
-	bitOff := r.pos.Bits()
-	var val uint16
-
-	if r.msbFirst {
-		raw := uint32(buf[0])<<16 | uint32(buf[1])<<8 | uint32(buf[2])
-		val = uint16(raw >> (8 - bitOff))
-	} else {
-		raw := uint32(buf[0]) | uint32(buf[1])<<8 | uint32(buf[2])<<16
-		val = uint16((raw >> bitOff) & 0xFFFF)
-		// Left-align the value
-		val <<= (16 - bits)
-	}
-
-	return val
-}
-
-// Peek32 returns up to 32 bits left-aligned in a uint32, zero-padded at EOF.
-// Does not advance position. Does not return an error.
-func (r *Reader) Peek32() uint32 {
-	remaining := r.end.Diff(r.pos)
-	if remaining == 0 {
-		return 0
-	}
-	bits := uint8(32)
-	if remaining.TotalBits() < 32 {
-		bits = uint8(remaining.TotalBits())
-	}
-
-	buf := r.peekBytesZeroPad(5)
-	bitOff := r.pos.Bits()
-	var val uint32
-
-	if r.msbFirst {
-		raw := uint64(buf[0])<<32 | uint64(buf[1])<<24 | uint64(buf[2])<<16 | uint64(buf[3])<<8 | uint64(buf[4])
-		val = uint32(raw >> (8 - bitOff))
-	} else {
-		raw := uint64(buf[0]) | uint64(buf[1])<<8 | uint64(buf[2])<<16 | uint64(buf[3])<<24 | uint64(buf[4])<<32
-		val = uint32((raw >> bitOff) & 0xFFFFFFFF)
-		// Left-align the value
-		val <<= (32 - bits)
-	}
-
-	return val
-}
-
-// Peek64 returns up to 64 bits left-aligned in a uint64, zero-padded at EOF.
-// Does not advance position. Does not return an error.
-func (r *Reader) Peek64() uint64 {
-	remaining := r.end.Diff(r.pos)
-	if remaining == 0 {
-		return 0
-	}
-	bits := uint8(64)
-	if remaining.TotalBits() < 64 {
-		bits = uint8(remaining.TotalBits())
-	}
-
 	buf := r.peekBytesZeroPad(9)
 	bitOff := r.pos.Bits()
 	var val uint64
-
 	if r.msbFirst {
-		// Read 9 bytes big-endian style for MSB-first
 		hi := uint64(buf[0])<<56 | uint64(buf[1])<<48 | uint64(buf[2])<<40 | uint64(buf[3])<<32
 		lo := uint64(buf[4])<<24 | uint64(buf[5])<<16 | uint64(buf[6])<<8 | uint64(buf[7])
-		extra := uint64(buf[8])
-		raw := (hi | lo) << bitOff
-		raw |= extra >> (8 - bitOff)
-		val = raw
+		val = (hi | lo) << bitOff
+		val |= uint64(buf[8]) >> (8 - bitOff)
 	} else {
-		// Read 9 bytes little-endian style for LSB-first
 		lo := uint64(buf[0]) | uint64(buf[1])<<8 | uint64(buf[2])<<16 | uint64(buf[3])<<24
 		hi := uint64(buf[4])<<32 | uint64(buf[5])<<40 | uint64(buf[6])<<48 | uint64(buf[7])<<56
-		combined := lo | hi
-		val = combined >> bitOff
+		val = (lo | hi) >> bitOff
 		if bitOff > 0 {
 			val |= uint64(buf[8]) << (64 - bitOff)
 		}
-		// Left-align the value
-		val <<= (64 - bits)
+		val <<= (64 - bits) // left-align for LSB mode
 	}
-
-	return val
+	return val >> (64 - maxBits)
 }
 
-// MustRead8 reads up to 8 bits and advances position.
-// Zero-pads if insufficient data. Does not return an error.
-func (r *Reader) MustRead8(bits uint8) uint8 {
-	if bits > 8 {
-		bits = 8
+// Peek8/16/32/64 return left-aligned bits, zero-padded at EOF. No position advance, no error.
+func (r *Reader) Peek8() uint8   { return uint8(r.peekLeftAligned(8)) }
+func (r *Reader) Peek16() uint16 { return uint16(r.peekLeftAligned(16)) }
+func (r *Reader) Peek32() uint32 { return uint32(r.peekLeftAligned(32)) }
+func (r *Reader) Peek64() uint64 { return r.peekLeftAligned(64) }
+
+// mustReadInternal reads up to maxBits, advances position, zero-pads at EOF.
+func (r *Reader) mustReadInternal(bits, maxBits uint8) uint64 {
+	if bits > maxBits {
+		bits = maxBits
 	}
 	remaining := r.end.Diff(r.pos)
+	if remaining == 0 {
+		return 0
+	}
 	actualBits := bits
 	if remaining.TotalBits() < uint64(bits) {
 		actualBits = uint8(remaining.TotalBits())
 	}
-
-	if actualBits == 0 {
-		return 0
-	}
-
-	var val uint8
-	if r.msbFirst {
-		val = readUint8MSB(r.peekBytesZeroPad(2), 0, r.pos.Bits(), actualBits)
-	} else {
-		val = readUint8(r.peekBytesZeroPad(2), 0, r.pos.Bits(), actualBits)
-	}
-
-	r.pos = r.pos.Add(NewSize(0, uint64(actualBits)))
-	return val
-}
-
-// MustRead16 reads up to 16 bits and advances position.
-// Zero-pads if insufficient data. Does not return an error.
-func (r *Reader) MustRead16(bits uint8) uint16 {
-	if bits > 16 {
-		bits = 16
-	}
-	remaining := r.end.Diff(r.pos)
-	actualBits := bits
-	if remaining.TotalBits() < uint64(bits) {
-		actualBits = uint8(remaining.TotalBits())
-	}
-
-	if actualBits == 0 {
-		return 0
-	}
-
-	var val uint16
-	if r.msbFirst {
-		val = readUint16MSB(r.peekBytesZeroPad(3), 0, r.pos.Bits(), actualBits)
-	} else {
-		val = readUint16(r.peekBytesZeroPad(3), 0, r.pos.Bits(), actualBits)
-	}
-
-	r.pos = r.pos.Add(NewSize(0, uint64(actualBits)))
-	return val
-}
-
-// MustRead32 reads up to 32 bits and advances position.
-// Zero-pads if insufficient data. Does not return an error.
-func (r *Reader) MustRead32(bits uint8) uint32 {
-	if bits > 32 {
-		bits = 32
-	}
-	remaining := r.end.Diff(r.pos)
-	actualBits := bits
-	if remaining.TotalBits() < uint64(bits) {
-		actualBits = uint8(remaining.TotalBits())
-	}
-
-	if actualBits == 0 {
-		return 0
-	}
-
-	var val uint32
-	if r.msbFirst {
-		val = readUint32MSB(r.peekBytesZeroPad(5), 0, r.pos.Bits(), actualBits)
-	} else {
-		val = readUint32(r.peekBytesZeroPad(5), 0, r.pos.Bits(), actualBits)
-	}
-
-	r.pos = r.pos.Add(NewSize(0, uint64(actualBits)))
-	return val
-}
-
-// MustRead64 reads up to 64 bits and advances position.
-// Zero-pads if insufficient data. Does not return an error.
-func (r *Reader) MustRead64(bits uint8) uint64 {
-	if bits > 64 {
-		bits = 64
-	}
-	remaining := r.end.Diff(r.pos)
-	actualBits := bits
-	if remaining.TotalBits() < uint64(bits) {
-		actualBits = uint8(remaining.TotalBits())
-	}
-
-	if actualBits == 0 {
-		return 0
-	}
-
+	buf := r.peekBytesZeroPad(9)
 	var val uint64
 	if r.msbFirst {
-		val = readUint64MSB(r.peekBytesZeroPad(9), 0, r.pos.Bits(), actualBits)
+		val = readUint64MSB(buf, 0, r.pos.Bits(), actualBits)
 	} else {
-		val = readUint64(r.peekBytesZeroPad(9), 0, r.pos.Bits(), actualBits)
+		val = readUint64(buf, 0, r.pos.Bits(), actualBits)
 	}
-
 	r.pos = r.pos.Add(NewSize(0, uint64(actualBits)))
 	return val
 }
+
+// MustRead8/16/32/64 read bits, advance position, zero-pad at EOF. No error return.
+func (r *Reader) MustRead8(bits uint8) uint8   { return uint8(r.mustReadInternal(bits, 8)) }
+func (r *Reader) MustRead16(bits uint8) uint16 { return uint16(r.mustReadInternal(bits, 16)) }
+func (r *Reader) MustRead32(bits uint8) uint32 { return uint32(r.mustReadInternal(bits, 32)) }
+func (r *Reader) MustRead64(bits uint8) uint64 { return r.mustReadInternal(bits, 64) }
 
 // Span returns a new reader that covers a sub-range.
 func (r *Reader) Span(start, end BitPos) (*Reader, error) {
