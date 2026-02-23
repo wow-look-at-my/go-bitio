@@ -7,50 +7,50 @@ import (
 
 // Writer writes data at arbitrary bit positions to a byte slice.
 type Writer struct {
-	data		[]byte
-	pos		Position
-	end		Position
-	autoGrow	bool
+	data     []byte
+	pos      BitPos
+	end      BitPos
+	autoGrow bool
 }
 
 // NewWriter creates a new Writer with a fixed-size buffer.
 func NewWriter(data []byte) *Writer {
 	return &Writer{
-		data:		data,
-		pos:		Zero,
-		end:		Zero,
-		autoGrow:	false,
+		data:     data,
+		pos:      0,
+		end:      0,
+		autoGrow: false,
 	}
 }
 
 // NewWriterSize creates a new Writer with an initial buffer size.
 func NewWriterSize(size int) *Writer {
 	return &Writer{
-		data:		make([]byte, size),
-		pos:		Zero,
-		end:		Zero,
-		autoGrow:	false,
+		data:     make([]byte, size),
+		pos:      0,
+		end:      0,
+		autoGrow: false,
 	}
 }
 
 // NewWriterAutoGrow creates a new Writer that automatically grows its buffer.
 func NewWriterAutoGrow() *Writer {
 	return &Writer{
-		data:		make([]byte, 64),
-		pos:		Zero,
-		end:		Zero,
-		autoGrow:	true,
+		data:     make([]byte, 64),
+		pos:      0,
+		end:      0,
+		autoGrow: true,
 	}
 }
 
 // Position returns the current write position.
-func (w *Writer) Position() Position {
+func (w *Writer) Position() BitPos {
 	return w.pos
 }
 
 // Length returns the total length written so far.
-func (w *Writer) Length() Position {
-	return w.end
+func (w *Writer) Length() BitSize {
+	return BitSize(w.end)
 }
 
 // Data returns the underlying data slice up to the written length.
@@ -65,7 +65,7 @@ func (w *Writer) Bytes() []byte {
 }
 
 // ensureCapacity ensures the buffer can hold at least newEnd bits.
-func (w *Writer) ensureCapacity(newEnd Position) error {
+func (w *Writer) ensureCapacity(newEnd BitPos) error {
 	bytesNeeded := newEnd.TotalBytes()
 	if bytesNeeded <= uint64(len(w.data)) {
 		return nil
@@ -122,13 +122,13 @@ func (w *Writer) WriteUint8(value uint8, bits uint8) error {
 	if bits > 8 {
 		return errors.New("bits must be <= 8")
 	}
-	newEnd := w.pos.Add(FromBits(uint64(bits)))
+	newEnd := w.pos.Add(NewSize(0, uint64(bits)))
 	if err := w.ensureCapacity(newEnd); err != nil {
 		return err
 	}
 	writeBits(w.data, w.pos.Bytes(), w.pos.Bits(), bits, uint64(value))
 	w.pos = newEnd
-	if w.pos.Greater(w.end) {
+	if w.pos > w.end {
 		w.end = w.pos
 	}
 	return nil
@@ -139,13 +139,13 @@ func (w *Writer) WriteUint16(value uint16, bits uint8) error {
 	if bits > 16 {
 		return errors.New("bits must be <= 16")
 	}
-	newEnd := w.pos.Add(FromBits(uint64(bits)))
+	newEnd := w.pos.Add(NewSize(0, uint64(bits)))
 	if err := w.ensureCapacity(newEnd); err != nil {
 		return err
 	}
 	writeBits(w.data, w.pos.Bytes(), w.pos.Bits(), bits, uint64(value))
 	w.pos = newEnd
-	if w.pos.Greater(w.end) {
+	if w.pos > w.end {
 		w.end = w.pos
 	}
 	return nil
@@ -156,13 +156,13 @@ func (w *Writer) WriteUint32(value uint32, bits uint8) error {
 	if bits > 32 {
 		return errors.New("bits must be <= 32")
 	}
-	newEnd := w.pos.Add(FromBits(uint64(bits)))
+	newEnd := w.pos.Add(NewSize(0, uint64(bits)))
 	if err := w.ensureCapacity(newEnd); err != nil {
 		return err
 	}
 	writeBits(w.data, w.pos.Bytes(), w.pos.Bits(), bits, uint64(value))
 	w.pos = newEnd
-	if w.pos.Greater(w.end) {
+	if w.pos > w.end {
 		w.end = w.pos
 	}
 	return nil
@@ -173,13 +173,13 @@ func (w *Writer) WriteUint64(value uint64, bits uint8) error {
 	if bits > 64 {
 		return errors.New("bits must be <= 64")
 	}
-	newEnd := w.pos.Add(FromBits(uint64(bits)))
+	newEnd := w.pos.Add(NewSize(0, uint64(bits)))
 	if err := w.ensureCapacity(newEnd); err != nil {
 		return err
 	}
 	writeBits(w.data, w.pos.Bytes(), w.pos.Bits(), bits, value)
 	w.pos = newEnd
-	if w.pos.Greater(w.end) {
+	if w.pos > w.end {
 		w.end = w.pos
 	}
 	return nil
@@ -263,13 +263,13 @@ func (w *Writer) WriteBytesAligned(data []byte) error {
 	if !w.pos.IsByteAligned() {
 		return w.WriteBytes(data)
 	}
-	newEnd := w.pos.Add(FromBytes(uint64(len(data))))
+	newEnd := w.pos.Add(NewSize(uint64(len(data)), 0))
 	if err := w.ensureCapacity(newEnd); err != nil {
 		return err
 	}
 	copy(w.data[w.pos.Bytes():], data)
 	w.pos = newEnd
-	if w.pos.Greater(w.end) {
+	if w.pos > w.end {
 		w.end = w.pos
 	}
 	return nil
@@ -304,9 +304,9 @@ func (w *Writer) WriteFromReader(r *Reader) error {
 }
 
 // WriteFromReaderN copies a specific number of bits from a Reader.
-func (w *Writer) WriteFromReaderN(r *Reader, length Position) error {
+func (w *Writer) WriteFromReaderN(r *Reader, length BitSize) error {
 	remaining := length
-	for !remaining.IsZero() {
+	for remaining != 0 {
 		bits := uint8(8)
 		if remaining.Bytes() == 0 {
 			bits = remaining.Bits()
@@ -318,12 +318,12 @@ func (w *Writer) WriteFromReaderN(r *Reader, length Position) error {
 		if err := w.WriteUint8(val, bits); err != nil {
 			return err
 		}
-		remaining = remaining.Sub(FromBits(uint64(bits)))
+		remaining -= NewSize(0, uint64(bits))
 	}
 	return nil
 }
 
-// PadToByte adds Zero bits until the position is byte-aligned.
+// PadToByte adds zero bits until the position is byte-aligned.
 func (w *Writer) PadToByte() error {
 	if w.pos.Bits() == 0 {
 		return nil
@@ -332,8 +332,8 @@ func (w *Writer) PadToByte() error {
 }
 
 // Seek moves the write position.
-func (w *Writer) Seek(pos Position) error {
-	if pos.Greater(w.end) {
+func (w *Writer) Seek(pos BitPos) error {
+	if pos > w.end {
 		return errors.New("seek past end of written data")
 	}
 	w.pos = pos
@@ -342,11 +342,11 @@ func (w *Writer) Seek(pos Position) error {
 
 // Reset resets the writer to the beginning.
 func (w *Writer) Reset() {
-	w.pos = Zero
-	w.end = Zero
+	w.pos = 0
+	w.end = 0
 }
 
 // ToReader creates a Reader from the written data.
 func (w *Writer) ToReader() *Reader {
-	return NewReaderWithBounds(w.data, Zero, w.end)
+	return NewReaderWithBounds(w.data, 0, w.end)
 }
