@@ -13,6 +13,7 @@ type Reader struct {
 	pos      BitPos
 	end      BitPos
 	msbFirst bool // If true, read bits from MSB to LSB within each byte
+	reverse  bool // If true, read bytes in reverse order (last byte first) using MSB-first ordering
 }
 
 // SetMSBFirst sets whether bits are read MSB first (true) or LSB first (false, default).
@@ -23,6 +24,21 @@ func (r *Reader) SetMSBFirst(msb bool) {
 // MSBFirst returns true if the reader is in MSB-first mode.
 func (r *Reader) MSBFirst() bool {
 	return r.msbFirst
+}
+
+// SetReverse sets whether bytes are read in reverse order (last byte first).
+// Reverse mode always uses MSB-first bit ordering within each byte.
+// This is useful for reading entropy-coded streams from the end without copying data.
+func (r *Reader) SetReverse(reverse bool) {
+	r.reverse = reverse
+	if reverse {
+		r.msbFirst = true
+	}
+}
+
+// Reverse returns true if the reader is in reverse mode.
+func (r *Reader) Reverse() bool {
+	return r.reverse
 }
 
 // NewReader creates a new Reader from data.
@@ -42,6 +58,25 @@ func NewReaderWithBounds(data []byte, start, end BitPos) *Reader {
 		start: start,
 		pos:   start,
 		end:   end,
+	}
+}
+
+// NewReaderReverse creates a Reader that reads bytes in reverse order (last byte first)
+// using MSB-first bit ordering. The reader operates on the same underlying data without
+// copying. Logical positions advance forward (0, 1, 2, ...) but map to physical bytes
+// starting from the end of the slice.
+//
+// This is designed for entropy-coded streams where two readers consume from opposite
+// ends of the same byte slice. The forward reader's LocalPosition plus the reverse
+// reader's LocalPosition should equal the total bit count when they converge.
+func NewReaderReverse(data []byte) *Reader {
+	return &Reader{
+		data:     data,
+		start:    0,
+		pos:      0,
+		end:      FromBytes(uint64(len(data))),
+		msbFirst: true,
+		reverse:  true,
 	}
 }
 
@@ -352,6 +387,137 @@ func readUint64MSB(data []byte, byteOff uint64, bitOff, bits uint8) uint64 {
 	}
 }
 
+// readUint8MSBReverse reads up to 8 bits in MSB-first order with reversed byte access.
+// Logical byteOff 0 maps to the last physical byte, byteOff 1 to second-to-last, etc.
+func readUint8MSBReverse(data []byte, byteOff uint64, bitOff, bits uint8) uint8 {
+	if bits == 0 {
+		return 0
+	}
+	n := uint64(len(data))
+	bytesNeeded := (bitOff + bits + 7) / 8
+	if bytesNeeded == 1 {
+		shift := 8 - bitOff - bits
+		return (data[n-1-byteOff] >> shift) & uint8(bitMask(bits))
+	}
+	// Need 2 bytes: physical bytes data[n-1-byteOff] (high) and data[n-2-byteOff] (low)
+	val := uint16(data[n-1-byteOff])<<8 | uint16(data[n-2-byteOff])
+	shift := 16 - bitOff - bits
+	return uint8((val >> shift) & uint16(bitMask(bits)))
+}
+
+// readUint16MSBReverse reads up to 16 bits in MSB-first order with reversed byte access.
+func readUint16MSBReverse(data []byte, byteOff uint64, bitOff, bits uint8) uint16 {
+	if bits == 0 {
+		return 0
+	}
+	n := uint64(len(data))
+	bytesNeeded := (bitOff + bits + 7) / 8
+	switch bytesNeeded {
+	case 1:
+		shift := 8 - bitOff - bits
+		return uint16(data[n-1-byteOff]>>shift) & uint16(bitMask(bits))
+	case 2:
+		val := uint16(data[n-1-byteOff])<<8 | uint16(data[n-2-byteOff])
+		shift := 16 - bitOff - bits
+		return (val >> shift) & uint16(bitMask(bits))
+	default: // 3 bytes
+		val := uint32(data[n-1-byteOff])<<16 | uint32(data[n-2-byteOff])<<8 | uint32(data[n-3-byteOff])
+		shift := 24 - bitOff - bits
+		return uint16((val >> shift) & uint32(bitMask(bits)))
+	}
+}
+
+// readUint32MSBReverse reads up to 32 bits in MSB-first order with reversed byte access.
+func readUint32MSBReverse(data []byte, byteOff uint64, bitOff, bits uint8) uint32 {
+	if bits == 0 {
+		return 0
+	}
+	n := uint64(len(data))
+	bytesNeeded := (bitOff + bits + 7) / 8
+	switch bytesNeeded {
+	case 1:
+		shift := 8 - bitOff - bits
+		return uint32(data[n-1-byteOff]>>shift) & uint32(bitMask(bits))
+	case 2:
+		val := uint16(data[n-1-byteOff])<<8 | uint16(data[n-2-byteOff])
+		shift := 16 - bitOff - bits
+		return uint32(val>>shift) & uint32(bitMask(bits))
+	case 3:
+		val := uint32(data[n-1-byteOff])<<16 | uint32(data[n-2-byteOff])<<8 | uint32(data[n-3-byteOff])
+		shift := 24 - bitOff - bits
+		return (val >> shift) & uint32(bitMask(bits))
+	case 4:
+		val := uint32(data[n-1-byteOff])<<24 | uint32(data[n-2-byteOff])<<16 |
+			uint32(data[n-3-byteOff])<<8 | uint32(data[n-4-byteOff])
+		shift := 32 - bitOff - bits
+		return (val >> shift) & uint32(bitMask(bits))
+	default: // 5 bytes
+		val := uint64(data[n-1-byteOff])<<32 | uint64(data[n-2-byteOff])<<24 |
+			uint64(data[n-3-byteOff])<<16 | uint64(data[n-4-byteOff])<<8 | uint64(data[n-5-byteOff])
+		shift := 40 - bitOff - bits
+		return uint32((val >> shift) & uint64(bitMask(bits)))
+	}
+}
+
+// readUint64MSBReverse reads up to 64 bits in MSB-first order with reversed byte access.
+func readUint64MSBReverse(data []byte, byteOff uint64, bitOff, bits uint8) uint64 {
+	if bits == 0 {
+		return 0
+	}
+	n := uint64(len(data))
+	bytesNeeded := (bitOff + bits + 7) / 8
+	switch bytesNeeded {
+	case 1:
+		shift := 8 - bitOff - bits
+		return uint64(data[n-1-byteOff]>>shift) & bitMask(bits)
+	case 2:
+		val := uint16(data[n-1-byteOff])<<8 | uint16(data[n-2-byteOff])
+		shift := 16 - bitOff - bits
+		return uint64(val>>shift) & bitMask(bits)
+	case 3:
+		val := uint32(data[n-1-byteOff])<<16 | uint32(data[n-2-byteOff])<<8 | uint32(data[n-3-byteOff])
+		shift := 24 - bitOff - bits
+		return uint64(val>>shift) & bitMask(bits)
+	case 4:
+		val := uint32(data[n-1-byteOff])<<24 | uint32(data[n-2-byteOff])<<16 |
+			uint32(data[n-3-byteOff])<<8 | uint32(data[n-4-byteOff])
+		shift := 32 - bitOff - bits
+		return uint64(val>>shift) & bitMask(bits)
+	case 5:
+		val := uint64(data[n-1-byteOff])<<32 | uint64(data[n-2-byteOff])<<24 |
+			uint64(data[n-3-byteOff])<<16 | uint64(data[n-4-byteOff])<<8 | uint64(data[n-5-byteOff])
+		shift := 40 - bitOff - bits
+		return (val >> shift) & bitMask(bits)
+	case 6:
+		val := uint64(data[n-1-byteOff])<<40 | uint64(data[n-2-byteOff])<<32 |
+			uint64(data[n-3-byteOff])<<24 | uint64(data[n-4-byteOff])<<16 |
+			uint64(data[n-5-byteOff])<<8 | uint64(data[n-6-byteOff])
+		shift := 48 - bitOff - bits
+		return (val >> shift) & bitMask(bits)
+	case 7:
+		val := uint64(data[n-1-byteOff])<<48 | uint64(data[n-2-byteOff])<<40 |
+			uint64(data[n-3-byteOff])<<32 | uint64(data[n-4-byteOff])<<24 |
+			uint64(data[n-5-byteOff])<<16 | uint64(data[n-6-byteOff])<<8 | uint64(data[n-7-byteOff])
+		shift := 56 - bitOff - bits
+		return (val >> shift) & bitMask(bits)
+	case 8:
+		val := uint64(data[n-1-byteOff])<<56 | uint64(data[n-2-byteOff])<<48 |
+			uint64(data[n-3-byteOff])<<40 | uint64(data[n-4-byteOff])<<32 |
+			uint64(data[n-5-byteOff])<<24 | uint64(data[n-6-byteOff])<<16 |
+			uint64(data[n-7-byteOff])<<8 | uint64(data[n-8-byteOff])
+		shift := 64 - bitOff - bits
+		return (val >> shift) & bitMask(bits)
+	default: // 9 bytes needed when bitOff > 0 and bits == 64
+		part1 := uint64(data[n-1-byteOff])<<56 | uint64(data[n-2-byteOff])<<48 |
+			uint64(data[n-3-byteOff])<<40 | uint64(data[n-4-byteOff])<<32 |
+			uint64(data[n-5-byteOff])<<24 | uint64(data[n-6-byteOff])<<16 |
+			uint64(data[n-7-byteOff])<<8 | uint64(data[n-8-byteOff])
+		part1 = part1 << bitOff
+		part2 := uint64(data[n-9-byteOff]) >> (8 - bitOff)
+		return (part1 | part2) & bitMask(bits)
+	}
+}
+
 // PeekUint8 peeks up to 8 bits without advancing position.
 func (r *Reader) PeekUint8(bits uint8) (uint8, error) {
 	if bits > 8 {
@@ -359,6 +525,9 @@ func (r *Reader) PeekUint8(bits uint8) (uint8, error) {
 	}
 	if r.pos.Add(NewSize(0, uint64(bits))) > r.end {
 		return 0, io.EOF
+	}
+	if r.reverse {
+		return readUint8MSBReverse(r.data, r.pos.Bytes(), r.pos.Bits(), bits), nil
 	}
 	if r.msbFirst {
 		return readUint8MSB(r.data, r.pos.Bytes(), r.pos.Bits(), bits), nil
@@ -374,6 +543,9 @@ func (r *Reader) PeekUint16(bits uint8) (uint16, error) {
 	if r.pos.Add(NewSize(0, uint64(bits))) > r.end {
 		return 0, io.EOF
 	}
+	if r.reverse {
+		return readUint16MSBReverse(r.data, r.pos.Bytes(), r.pos.Bits(), bits), nil
+	}
 	if r.msbFirst {
 		return readUint16MSB(r.data, r.pos.Bytes(), r.pos.Bits(), bits), nil
 	}
@@ -388,6 +560,9 @@ func (r *Reader) PeekUint32(bits uint8) (uint32, error) {
 	if r.pos.Add(NewSize(0, uint64(bits))) > r.end {
 		return 0, io.EOF
 	}
+	if r.reverse {
+		return readUint32MSBReverse(r.data, r.pos.Bytes(), r.pos.Bits(), bits), nil
+	}
 	if r.msbFirst {
 		return readUint32MSB(r.data, r.pos.Bytes(), r.pos.Bits(), bits), nil
 	}
@@ -401,6 +576,9 @@ func (r *Reader) PeekUint64(bits uint8) (uint64, error) {
 	}
 	if r.pos.Add(NewSize(0, uint64(bits))) > r.end {
 		return 0, io.EOF
+	}
+	if r.reverse {
+		return readUint64MSBReverse(r.data, r.pos.Bytes(), r.pos.Bits(), bits), nil
 	}
 	if r.msbFirst {
 		return readUint64MSB(r.data, r.pos.Bytes(), r.pos.Bits(), bits), nil
@@ -569,10 +747,12 @@ func (r *Reader) ReadVarint() (int32, error) {
 // Clone returns a copy of the reader with the same position.
 func (r *Reader) Clone() *Reader {
 	return &Reader{
-		data:  r.data,
-		start: r.start,
-		pos:   r.pos,
-		end:   r.end,
+		data:     r.data,
+		start:    r.start,
+		pos:      r.pos,
+		end:      r.end,
+		msbFirst: r.msbFirst,
+		reverse:  r.reverse,
 	}
 }
 
@@ -588,10 +768,12 @@ func (r *Reader) Span(start, end BitPos) (*Reader, error) {
 		return nil, errors.New("end out of bounds")
 	}
 	return &Reader{
-		data:  r.data,
-		start: start,
-		pos:   start,
-		end:   end,
+		data:     r.data,
+		start:    start,
+		pos:      start,
+		end:      end,
+		msbFirst: r.msbFirst,
+		reverse:  r.reverse,
 	}, nil
 }
 
