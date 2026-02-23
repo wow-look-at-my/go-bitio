@@ -9,20 +9,20 @@ import (
 )
 
 const (
-	TypeUint8	= 0
-	TypeUint16	= 1
-	TypeUint32	= 2
-	TypeUint64	= 3
-	TypeString	= 4
-	TypeFloat32	= 5
-	TypeFloat64	= 6
-	TypeVaruint	= 7
+	TypeUint8   = 0
+	TypeUint16  = 1
+	TypeUint32  = 2
+	TypeUint64  = 3
+	TypeString  = 4
+	TypeFloat32 = 5
+	TypeFloat64 = 6
+	TypeVaruint = 7
 )
 
-func main() {
-	const numOps = 100000
-
-	rng := rand.New(rand.NewSource(rand.Int63()))
+// GenerateTestStream creates a mixed-type bit stream for benchmarking.
+// The stream contains type tags followed by type-specific data.
+func GenerateTestStream(seed int64, numOps int) []byte {
+	rng := rand.New(rand.NewSource(seed))
 	w := bitio.NewWriterAutoGrow()
 
 	for i := 0; i < numOps; i++ {
@@ -69,9 +69,15 @@ func main() {
 		}
 	}
 
-	if err := os.WriteFile("testdata/bench_stream.bin", w.Bytes(), 0644); err != nil {
+	return w.Bytes()
+}
+
+func main() {
+	data := GenerateTestStream(rand.Int63(), 100000)
+
+	if err := os.WriteFile("testdata/bench_stream.bin", data, 0644); err != nil {
 		panic(err)
 	}
 
-	fmt.Printf("Written %d bytes\n", len(w.Bytes()))
+	fmt.Printf("Written %d bytes\n", len(data))
 }

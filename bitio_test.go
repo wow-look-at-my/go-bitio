@@ -594,9 +594,7 @@ func TestWriterErrorCases(t *testing.T) {
 // BenchmarkRead reads bench_stream.bin (same as C++ benchmark)
 func BenchmarkRead(b *testing.B) {
 	data, err := os.ReadFile("testdata/bench_stream.bin")
-	if err != nil {
-		b.Fatal(err)
-	}
+	require.Nil(b, err)
 
 	const (
 		TypeUint8	= 0
