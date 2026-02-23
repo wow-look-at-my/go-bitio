@@ -18,8 +18,8 @@ type Reader struct {
 func NewReader(data []byte) *Reader {
 	return &Reader{
 		data:  data,
-		start: zero,
-		pos:   zero,
+		start: Zero,
+		pos:   Zero,
 		end:   FromBytes(uint64(len(data))),
 	}
 }

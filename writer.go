@@ -17,8 +17,8 @@ type Writer struct {
 func NewWriter(data []byte) *Writer {
 	return &Writer{
 		data:		data,
-		pos:		zero,
-		end:		zero,
+		pos:		Zero,
+		end:		Zero,
 		autoGrow:	false,
 	}
 }
@@ -27,8 +27,8 @@ func NewWriter(data []byte) *Writer {
 func NewWriterSize(size int) *Writer {
 	return &Writer{
 		data:		make([]byte, size),
-		pos:		zero,
-		end:		zero,
+		pos:		Zero,
+		end:		Zero,
 		autoGrow:	false,
 	}
 }
@@ -37,8 +37,8 @@ func NewWriterSize(size int) *Writer {
 func NewWriterAutoGrow() *Writer {
 	return &Writer{
 		data:		make([]byte, 64),
-		pos:		zero,
-		end:		zero,
+		pos:		Zero,
+		end:		Zero,
 		autoGrow:	true,
 	}
 }
@@ -323,7 +323,7 @@ func (w *Writer) WriteFromReaderN(r *Reader, length Position) error {
 	return nil
 }
 
-// PadToByte adds zero bits until the position is byte-aligned.
+// PadToByte adds Zero bits until the position is byte-aligned.
 func (w *Writer) PadToByte() error {
 	if w.pos.Bits() == 0 {
 		return nil
@@ -342,11 +342,11 @@ func (w *Writer) Seek(pos Position) error {
 
 // Reset resets the writer to the beginning.
 func (w *Writer) Reset() {
-	w.pos = zero
-	w.end = zero
+	w.pos = Zero
+	w.end = Zero
 }
 
 // ToReader creates a Reader from the written data.
 func (w *Writer) ToReader() *Reader {
-	return NewReaderWithBounds(w.data, zero, w.end)
+	return NewReaderWithBounds(w.data, Zero, w.end)
 }

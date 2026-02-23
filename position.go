@@ -11,8 +11,8 @@ type Position struct {
 	bits  uint8
 }
 
-// zero is the zero position. Unexported so external packages can't corrupt it.
-var zero = Position{}
+// Zero is the zero position.
+var Zero = Position{}
 
 // NewPosition creates a new Position from bytes and bits.
 // If bits >= 8, it normalizes by adding to bytes.

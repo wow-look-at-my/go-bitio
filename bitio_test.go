@@ -247,7 +247,7 @@ func BenchmarkReadUint32(b *testing.B) {
 		r := NewReader(data)
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			r.pos = zero
+			r.pos = Zero
 			for j := 0; j < 256; j++ {
 				r.ReadUint32(32)
 			}
