@@ -250,7 +250,7 @@ func TestReadStringN(t *testing.T) {
 	r := w.ToReader()
 	s, err := r.ReadStringN(5)
 	require.Nil(t, err)
-	assert.Equal(t, "hell", s) // Reads 4 chars + null
+	assert.Equal(t, "hello", s) // Reads up to 5 chars before stopping
 }
 
 func TestReadBytes(t *testing.T) {
