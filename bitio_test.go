@@ -2,7 +2,9 @@ package bitio
 
 import (
 	"bytes"
+	"math/rand"
 	"testing"
+
 	"github.com/wow-look-at-my/testify/assert"
 	"github.com/wow-look-at-my/testify/require"
 )
@@ -588,55 +590,157 @@ func TestWriterErrorCases(t *testing.T) {
 	assert.NotNil(t, err)
 }
 
-func BenchmarkReadUint32(b *testing.B) {
-	data := make([]byte, 1024)
-	for i := range data {
-		data[i] = byte(i)
+// BenchmarkRead exercises read functions over 1MB of random data
+func BenchmarkRead(b *testing.B) {
+	const size = 1024 * 1024
+	data := make([]byte, size)
+	rng := rand.New(rand.NewSource(42))
+	rng.Read(data)
+
+	// Pre-generate random bit counts for deterministic benchmark
+	// Each entry: bits to read (1-64)
+	const numOps = 100000
+	bitCounts := make([]uint8, numOps)
+	opRng := rand.New(rand.NewSource(123))
+	for i := range bitCounts {
+		bitCounts[i] = uint8(1 + opRng.Intn(64))
 	}
 
-	b.Run("Aligned", func(b *testing.B) {
+	b.Run("Mixed", func(b *testing.B) {
 		r := NewReader(data)
+		b.SetBytes(size)
 		b.ResetTimer()
+
 		for i := 0; i < b.N; i++ {
 			r.pos = Zero
-			for j := 0; j < 256; j++ {
-				r.ReadUint32(32)
-			}
-		}
-	})
+			opIdx := 0
+			for r.Remaining().TotalBits() > 64 {
+				bits := bitCounts[opIdx%numOps]
+				opIdx++
 
-	b.Run("Unaligned", func(b *testing.B) {
-		r := NewReader(data)
-		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
-			r.pos = FromBits(3)	// Start at bit 3
-			for j := 0; j < 200; j++ {
-				r.ReadUint32(32)
+				// Use appropriate read function based on bit count
+				switch {
+				case bits == 1:
+					r.ReadBit()
+				case bits <= 8:
+					r.ReadUint8(bits)
+				case bits <= 16:
+					r.ReadUint16(bits)
+				case bits <= 32:
+					r.ReadUint32(bits)
+				default:
+					r.ReadUint64(bits)
+				}
 			}
 		}
 	})
 }
 
-func BenchmarkWriteUint32(b *testing.B) {
-	b.Run("Aligned", func(b *testing.B) {
-		w := NewWriterSize(4096)
+// BenchmarkWrite exercises write functions over 1MB
+func BenchmarkWrite(b *testing.B) {
+	const size = 1024 * 1024
+
+	// Pre-generate random bit counts and values for deterministic benchmark
+	const numOps = 100000
+	bitCounts := make([]uint8, numOps)
+	values := make([]uint64, numOps)
+	opRng := rand.New(rand.NewSource(456))
+	for i := range bitCounts {
+		bitCounts[i] = uint8(1 + opRng.Intn(64))
+		values[i] = opRng.Uint64()
+	}
+
+	b.Run("Mixed", func(b *testing.B) {
+		w := NewWriterSize(size + 1024)
+		b.SetBytes(size)
 		b.ResetTimer()
+
 		for i := 0; i < b.N; i++ {
 			w.Reset()
-			for j := 0; j < 256; j++ {
-				w.WriteUint32(0xDEADBEEF, 32)
+			opIdx := 0
+			for w.Length().TotalBytes() < uint64(size-64) {
+				bits := bitCounts[opIdx%numOps]
+				val := values[opIdx%numOps]
+				opIdx++
+
+				switch {
+				case bits == 1:
+					w.WriteBit(val&1 == 1)
+				case bits <= 8:
+					w.WriteUint8(uint8(val), bits)
+				case bits <= 16:
+					w.WriteUint16(uint16(val), bits)
+				case bits <= 32:
+					w.WriteUint32(uint32(val), bits)
+				default:
+					w.WriteUint64(val, bits)
+				}
 			}
 		}
 	})
+}
 
-	b.Run("Unaligned", func(b *testing.B) {
-		w := NewWriterSize(4096)
+// BenchmarkRoundTrip tests writing then reading the same data
+func BenchmarkRoundTrip(b *testing.B) {
+	const size = 1024 * 1024
+
+	// Pre-generate random bit counts and values for deterministic benchmark
+	const numOps = 100000
+	bitCounts := make([]uint8, numOps)
+	values := make([]uint64, numOps)
+	opRng := rand.New(rand.NewSource(789))
+	for i := range bitCounts {
+		bitCounts[i] = uint8(1 + opRng.Intn(64))
+		values[i] = opRng.Uint64()
+	}
+
+	b.Run("Mixed", func(b *testing.B) {
+		w := NewWriterSize(size + 1024)
+		b.SetBytes(size * 2)
 		b.ResetTimer()
+
 		for i := 0; i < b.N; i++ {
+			// Write phase
 			w.Reset()
-			w.WriteUint8(0, 3)	// Misalign by 3 bits
-			for j := 0; j < 200; j++ {
-				w.WriteUint32(0xDEADBEEF, 32)
+			opIdx := 0
+			for w.Length().TotalBytes() < uint64(size-64) {
+				bits := bitCounts[opIdx%numOps]
+				val := values[opIdx%numOps]
+				opIdx++
+
+				switch {
+				case bits == 1:
+					w.WriteBit(val&1 == 1)
+				case bits <= 8:
+					w.WriteUint8(uint8(val), bits)
+				case bits <= 16:
+					w.WriteUint16(uint16(val), bits)
+				case bits <= 32:
+					w.WriteUint32(uint32(val), bits)
+				default:
+					w.WriteUint64(val, bits)
+				}
+			}
+
+			// Read phase - use same bit counts
+			r := w.ToReader()
+			opIdx = 0
+			for r.Remaining().TotalBits() > 64 {
+				bits := bitCounts[opIdx%numOps]
+				opIdx++
+
+				switch {
+				case bits == 1:
+					r.ReadBit()
+				case bits <= 8:
+					r.ReadUint8(bits)
+				case bits <= 16:
+					r.ReadUint16(bits)
+				case bits <= 32:
+					r.ReadUint32(bits)
+				default:
+					r.ReadUint64(bits)
+				}
 			}
 		}
 	})
