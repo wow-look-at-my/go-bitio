@@ -8,10 +8,21 @@ import (
 
 // Reader reads data at arbitrary bit positions from a byte slice.
 type Reader struct {
-	data  []byte
-	start BitPos
-	pos   BitPos
-	end   BitPos
+	data     []byte
+	start    BitPos
+	pos      BitPos
+	end      BitPos
+	msbFirst bool // If true, read bits from MSB to LSB within each byte
+}
+
+// SetMSBFirst sets whether bits are read MSB first (true) or LSB first (false, default).
+func (r *Reader) SetMSBFirst(msb bool) {
+	r.msbFirst = msb
+}
+
+// MSBFirst returns true if the reader is in MSB-first mode.
+func (r *Reader) MSBFirst() bool {
+	return r.msbFirst
 }
 
 // NewReader creates a new Reader from data.
@@ -123,7 +134,7 @@ func bitMask(n uint8) uint64 {
 	return (1 << n) - 1
 }
 
-// readUint8 reads up to 8 bits from the buffer at the given byte offset and bit offset.
+// readUint8 reads up to 8 bits from the buffer at the given byte offset and bit offset (LSB first).
 func readUint8(data []byte, byteOff uint64, bitOff, bits uint8) uint8 {
 	if bits == 0 {
 		return 0
@@ -138,7 +149,34 @@ func readUint8(data []byte, byteOff uint64, bitOff, bits uint8) uint8 {
 	return uint8((val >> bitOff) & uint16(bitMask(bits)))
 }
 
-// readUint16 reads up to 16 bits from the buffer.
+// reverseByte reverses the bits in a byte.
+func reverseByte(b uint8) uint8 {
+	b = (b&0xF0)>>4 | (b&0x0F)<<4
+	b = (b&0xCC)>>2 | (b&0x33)<<2
+	b = (b&0xAA)>>1 | (b&0x55)<<1
+	return b
+}
+
+// readUint8MSB reads up to 8 bits from the buffer (MSB first).
+func readUint8MSB(data []byte, byteOff uint64, bitOff, bits uint8) uint8 {
+	if bits == 0 {
+		return 0
+	}
+	// MSB-first: bit 0 is the most significant bit of the byte
+	// We read from the high bits down
+	bytesNeeded := (bitOff + bits + 7) / 8
+	if bytesNeeded == 1 {
+		// Shift right to get the bits we want at the bottom, then mask
+		shift := 8 - bitOff - bits
+		return (data[byteOff] >> shift) & uint8(bitMask(bits))
+	}
+	// Need to read 2 bytes - combine them MSB first
+	val := uint16(data[byteOff])<<8 | uint16(data[byteOff+1])
+	shift := 16 - bitOff - bits
+	return uint8((val >> shift) & uint16(bitMask(bits)))
+}
+
+// readUint16 reads up to 16 bits from the buffer (LSB first).
 func readUint16(data []byte, byteOff uint64, bitOff, bits uint8) uint16 {
 	if bits == 0 {
 		return 0
@@ -156,7 +194,28 @@ func readUint16(data []byte, byteOff uint64, bitOff, bits uint8) uint16 {
 	}
 }
 
-// readUint32 reads up to 32 bits from the buffer.
+// readUint16MSB reads up to 16 bits from the buffer (MSB first).
+func readUint16MSB(data []byte, byteOff uint64, bitOff, bits uint8) uint16 {
+	if bits == 0 {
+		return 0
+	}
+	bytesNeeded := (bitOff + bits + 7) / 8
+	switch bytesNeeded {
+	case 1:
+		shift := 8 - bitOff - bits
+		return uint16(data[byteOff]>>shift) & uint16(bitMask(bits))
+	case 2:
+		val := binary.BigEndian.Uint16(data[byteOff:])
+		shift := 16 - bitOff - bits
+		return (val >> shift) & uint16(bitMask(bits))
+	default: // 3 bytes
+		val := uint32(data[byteOff])<<16 | uint32(data[byteOff+1])<<8 | uint32(data[byteOff+2])
+		shift := 24 - bitOff - bits
+		return uint16((val >> shift) & uint32(bitMask(bits)))
+	}
+}
+
+// readUint32 reads up to 32 bits from the buffer (LSB first).
 func readUint32(data []byte, byteOff uint64, bitOff, bits uint8) uint32 {
 	if bits == 0 {
 		return 0
@@ -180,7 +239,36 @@ func readUint32(data []byte, byteOff uint64, bitOff, bits uint8) uint32 {
 	}
 }
 
-// readUint64 reads up to 64 bits from the buffer.
+// readUint32MSB reads up to 32 bits from the buffer (MSB first).
+func readUint32MSB(data []byte, byteOff uint64, bitOff, bits uint8) uint32 {
+	if bits == 0 {
+		return 0
+	}
+	bytesNeeded := (bitOff + bits + 7) / 8
+	switch bytesNeeded {
+	case 1:
+		shift := 8 - bitOff - bits
+		return uint32(data[byteOff]>>shift) & uint32(bitMask(bits))
+	case 2:
+		val := binary.BigEndian.Uint16(data[byteOff:])
+		shift := 16 - bitOff - bits
+		return uint32(val>>shift) & uint32(bitMask(bits))
+	case 3:
+		val := uint32(data[byteOff])<<16 | uint32(data[byteOff+1])<<8 | uint32(data[byteOff+2])
+		shift := 24 - bitOff - bits
+		return (val >> shift) & uint32(bitMask(bits))
+	case 4:
+		val := binary.BigEndian.Uint32(data[byteOff:])
+		shift := 32 - bitOff - bits
+		return (val >> shift) & uint32(bitMask(bits))
+	default: // 5 bytes
+		val := uint64(data[byteOff])<<32 | uint64(binary.BigEndian.Uint32(data[byteOff+1:]))
+		shift := 40 - bitOff - bits
+		return uint32((val >> shift) & uint64(bitMask(bits)))
+	}
+}
+
+// readUint64 reads up to 64 bits from the buffer (LSB first).
 func readUint64(data []byte, byteOff uint64, bitOff, bits uint8) uint64 {
 	if bits == 0 {
 		return 0
@@ -218,6 +306,52 @@ func readUint64(data []byte, byteOff uint64, bitOff, bits uint8) uint64 {
 	}
 }
 
+// readUint64MSB reads up to 64 bits from the buffer (MSB first).
+func readUint64MSB(data []byte, byteOff uint64, bitOff, bits uint8) uint64 {
+	if bits == 0 {
+		return 0
+	}
+	bytesNeeded := (bitOff + bits + 7) / 8
+	switch bytesNeeded {
+	case 1:
+		shift := 8 - bitOff - bits
+		return uint64(data[byteOff]>>shift) & bitMask(bits)
+	case 2:
+		val := binary.BigEndian.Uint16(data[byteOff:])
+		shift := 16 - bitOff - bits
+		return uint64(val>>shift) & bitMask(bits)
+	case 3:
+		val := uint32(data[byteOff])<<16 | uint32(data[byteOff+1])<<8 | uint32(data[byteOff+2])
+		shift := 24 - bitOff - bits
+		return uint64(val>>shift) & bitMask(bits)
+	case 4:
+		val := binary.BigEndian.Uint32(data[byteOff:])
+		shift := 32 - bitOff - bits
+		return uint64(val>>shift) & bitMask(bits)
+	case 5:
+		val := uint64(data[byteOff])<<32 | uint64(binary.BigEndian.Uint32(data[byteOff+1:]))
+		shift := 40 - bitOff - bits
+		return (val >> shift) & bitMask(bits)
+	case 6:
+		val := uint64(binary.BigEndian.Uint16(data[byteOff:]))<<32 | uint64(binary.BigEndian.Uint32(data[byteOff+2:]))
+		shift := 48 - bitOff - bits
+		return (val >> shift) & bitMask(bits)
+	case 7:
+		val := uint64(data[byteOff])<<48 | uint64(data[byteOff+1])<<40 | uint64(data[byteOff+2])<<32 |
+			uint64(binary.BigEndian.Uint32(data[byteOff+3:]))
+		shift := 56 - bitOff - bits
+		return (val >> shift) & bitMask(bits)
+	case 8:
+		val := binary.BigEndian.Uint64(data[byteOff:])
+		shift := 64 - bitOff - bits
+		return (val >> shift) & bitMask(bits)
+	default: // 9 bytes needed when bitOff > 0 and bits == 64
+		part1 := binary.BigEndian.Uint64(data[byteOff:]) << bitOff
+		part2 := uint64(data[byteOff+8]) >> (8 - bitOff)
+		return (part1 | part2) & bitMask(bits)
+	}
+}
+
 // PeekUint8 peeks up to 8 bits without advancing position.
 func (r *Reader) PeekUint8(bits uint8) (uint8, error) {
 	if bits > 8 {
@@ -225,6 +359,9 @@ func (r *Reader) PeekUint8(bits uint8) (uint8, error) {
 	}
 	if r.pos.Add(NewSize(0, uint64(bits))) > r.end {
 		return 0, io.EOF
+	}
+	if r.msbFirst {
+		return readUint8MSB(r.data, r.pos.Bytes(), r.pos.Bits(), bits), nil
 	}
 	return readUint8(r.data, r.pos.Bytes(), r.pos.Bits(), bits), nil
 }
@@ -237,6 +374,9 @@ func (r *Reader) PeekUint16(bits uint8) (uint16, error) {
 	if r.pos.Add(NewSize(0, uint64(bits))) > r.end {
 		return 0, io.EOF
 	}
+	if r.msbFirst {
+		return readUint16MSB(r.data, r.pos.Bytes(), r.pos.Bits(), bits), nil
+	}
 	return readUint16(r.data, r.pos.Bytes(), r.pos.Bits(), bits), nil
 }
 
@@ -248,6 +388,9 @@ func (r *Reader) PeekUint32(bits uint8) (uint32, error) {
 	if r.pos.Add(NewSize(0, uint64(bits))) > r.end {
 		return 0, io.EOF
 	}
+	if r.msbFirst {
+		return readUint32MSB(r.data, r.pos.Bytes(), r.pos.Bits(), bits), nil
+	}
 	return readUint32(r.data, r.pos.Bytes(), r.pos.Bits(), bits), nil
 }
 
@@ -258,6 +401,9 @@ func (r *Reader) PeekUint64(bits uint8) (uint64, error) {
 	}
 	if r.pos.Add(NewSize(0, uint64(bits))) > r.end {
 		return 0, io.EOF
+	}
+	if r.msbFirst {
+		return readUint64MSB(r.data, r.pos.Bytes(), r.pos.Bits(), bits), nil
 	}
 	return readUint64(r.data, r.pos.Bytes(), r.pos.Bits(), bits), nil
 }
