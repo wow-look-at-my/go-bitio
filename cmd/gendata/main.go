@@ -9,14 +9,14 @@ import (
 )
 
 const (
-	TypeUint8   = 0
-	TypeUint16  = 1
-	TypeUint32  = 2
-	TypeUint64  = 3
-	TypeString  = 4
-	TypeFloat32 = 5
-	TypeFloat64 = 6
-	TypeVaruint = 7
+	TypeUint8	= 0
+	TypeUint16	= 1
+	TypeUint32	= 2
+	TypeUint64	= 3
+	TypeString	= 4
+	TypeFloat32	= 5
+	TypeFloat64	= 6
+	TypeVaruint	= 7
 )
 
 func main() {
