@@ -32,7 +32,7 @@ func TestPosition(t *testing.T) {
 	t.Run("Add", func(t *testing.T) {
 		a := NewPosition(1, 5)
 		b := NewPosition(2, 4)
-		c := a.Add(b)
+		c := a + b
 		assert.Equal(t, uint64(4), c.Bytes())
 		assert.Equal(t, uint8(1), c.Bits())
 	})
@@ -40,7 +40,7 @@ func TestPosition(t *testing.T) {
 	t.Run("Sub", func(t *testing.T) {
 		a := NewPosition(3, 2)
 		b := NewPosition(1, 5)
-		c := a.Sub(b)
+		c := a - b
 		assert.Equal(t, uint64(1), c.Bytes())
 		assert.Equal(t, uint8(5), c.Bits())
 	})
@@ -194,15 +194,14 @@ func TestSeek(t *testing.T) {
 	r := NewReader(data)
 
 	r.ReadUint8(8)	// Read first byte
-	r.SeekBits(-8)	// Seek back
+	r.Seek(NewSize(0, 8), SeekBack)	// Seek back
 
 	val, _ := r.ReadUint8(8)
 	assert.Equal(t, uint8(0x12), val)
 
-	r.Seek(FromBits(16), SeekSet)
+	r.Seek(NewSize(0, 16), SeekSet)
 	val, _ = r.ReadUint8(8)
 	assert.Equal(t, uint8(0x56), val)
-
 }
 
 func TestReadUint64(t *testing.T) {
@@ -232,15 +231,15 @@ func TestReadUint64(t *testing.T) {
 		v1, _ := r.ReadUint64(8)
 		assert.Equal(t, uint64(0xEF), v1)
 
-		r.pos = Zero
+		r.pos = 0
 		v2, _ := r.ReadUint64(16)
 		assert.Equal(t, uint64(0xBEEF), v2)
 
-		r.pos = Zero
+		r.pos = 0
 		v3, _ := r.ReadUint64(32)
 		assert.Equal(t, uint64(0xDEADBEEF), v3)
 
-		r.pos = Zero
+		r.pos = 0
 		v4, _ := r.ReadUint64(48)
 		assert.Equal(t, uint64(0xBABEDEADBEEF), v4)
 	})
@@ -269,7 +268,7 @@ func TestTakeSpan(t *testing.T) {
 	data := []byte{0x12, 0x34, 0x56, 0x78}
 	r := NewReader(data)
 
-	span, err := r.TakeSpan(FromBits(16))
+	span, err := r.TakeSpan(NewSize(0,16))
 	require.Nil(t, err)
 
 	// Original reader should have advanced
@@ -319,7 +318,7 @@ func TestWriteFromReader(t *testing.T) {
 
 	// Copy to writer
 	w := NewWriterAutoGrow()
-	err := w.WriteFromReaderN(src, FromBits(24))
+	err := w.WriteFromReaderN(src, NewSize(0,24))
 	require.Nil(t, err)
 
 	assert.Equal(t, []byte{0x12, 0x34, 0x56}, w.Data())
@@ -330,7 +329,7 @@ func TestPadToByte(t *testing.T) {
 	w.WriteUint8(0x07, 3)	// Write 3 bits
 	w.PadToByte()		// Should write 5 zero bits
 
-	assert.Equal(t, FromBits(8), w.Length())
+	assert.Equal(t, NewSize(0,8), w.Length())
 	assert.Equal(t, []byte{0x07}, w.Data())
 }
 
@@ -340,7 +339,7 @@ func TestWriterSeek(t *testing.T) {
 	w.WriteUint8(0xCD, 8)
 
 	// Seek back and overwrite
-	err := w.Seek(Zero)
+	err := w.Seek(0)
 	require.Nil(t, err)
 	w.WriteUint8(0xFF, 8)
 
@@ -359,7 +358,7 @@ func TestWriterGrow(t *testing.T) {
 		w.WriteUint32(0xDEADBEEF, 32)
 	}
 
-	assert.Equal(t, FromBits(3200), w.Length())
+	assert.Equal(t, NewSize(0,3200), w.Length())
 }
 
 func TestFixedWriter(t *testing.T) {
@@ -379,23 +378,23 @@ func TestPositionComparisons(t *testing.T) {
 	b := NewPosition(2, 3)
 	c := NewPosition(1, 5)
 
-	assert.True(t, a.Less(b))
-	assert.True(t, a.LessOrEqual(b))
-	assert.True(t, a.LessOrEqual(c))
-	assert.True(t, b.Greater(a))
-	assert.True(t, b.GreaterOrEqual(a))
-	assert.True(t, a.GreaterOrEqual(c))
-	assert.True(t, a.Equal(c))
+	assert.True(t, a < b)
+	assert.True(t, a <= b)
+	assert.True(t, a <= c)
+	assert.True(t, b > a)
+	assert.True(t, b >= a)
+	assert.True(t, a >= c)
+	assert.True(t, a == c)
 
 	// Test Mul
-	d := NewPosition(1, 2).Mul(3)
+	d := NewPosition(1, 2) * 3
 	assert.Equal(t, uint64(30), d.TotalBits())	// (8+2)*3 = 30
 }
 
 func TestPositionHelpers(t *testing.T) {
 	p := NewPosition(2, 3)
 	assert.Equal(t, "2:3", p.String())
-	assert.False(t, p.IsZero())
+	assert.False(t, p == 0)
 	assert.False(t, p.IsByteAligned())
 
 	aligned := FromBytes(5)
@@ -407,10 +406,10 @@ func TestReaderHelpers(t *testing.T) {
 	data := []byte{0x12, 0x34, 0x56, 0x78}
 	r := NewReader(data)
 
-	assert.Equal(t, Zero, r.Position())
-	assert.Equal(t, Zero, r.LocalPosition())
-	assert.Equal(t, FromBytes(4), r.Length())
-	assert.Equal(t, FromBytes(4), r.Remaining())
+	assert.Equal(t, BitPos(0), r.Position())
+	assert.Equal(t, BitSize(0), r.LocalPosition())
+	assert.Equal(t, NewSize(4, 0), r.Length())
+	assert.Equal(t, NewSize(4, 0), r.Remaining())
 	assert.False(t, r.IsAtEnd())
 	assert.Equal(t, data, r.Data())
 
@@ -423,15 +422,15 @@ func TestReaderSeekModes(t *testing.T) {
 	r := NewReader(data)
 
 	// SeekEnd
-	r.Seek(FromBits(8), SeekEnd)
+	r.Seek(NewSize(0, 8), SeekEnd)
 	assert.Equal(t, FromBits(24), r.Position())
 
-	// SeekStart
-	r.Seek(FromBits(8), SeekStart)
+	// SeekSet to beginning
+	r.Seek(NewSize(0, 8), SeekSet)
 	assert.Equal(t, FromBits(8), r.Position())
 
-	// SeekBytes forward
-	r.SeekBytes(1)
+	// SeekFwd forward
+	r.Seek(NewSize(1, 0), SeekFwd)
 	assert.Equal(t, FromBits(16), r.Position())
 }
 
@@ -547,7 +546,7 @@ func TestWriterHelpers(t *testing.T) {
 	w.WriteUint32(0xDEADBEEF, 32)
 
 	assert.Equal(t, FromBits(32), w.Position())
-	assert.Equal(t, FromBits(32), w.Length())
+	assert.Equal(t, NewSize(0, 32), w.Length())
 	assert.Equal(t, 4, len(w.Bytes()))
 }
 
@@ -568,11 +567,11 @@ func TestErrorCases(t *testing.T) {
 	assert.NotNil(t, err)
 
 	// Seek before start
-	err = r.SeekBits(-100)
+	err = r.Seek(NewSize(0, 100), SeekBack)
 	assert.NotNil(t, err)
 
 	// Invalid seek mode (using a bogus value)
-	err = r.Seek(Zero, SeekMode(99))
+	err = r.Seek(BitSize(0), SeekMode(99))
 	assert.NotNil(t, err)
 }
 
@@ -589,6 +588,144 @@ func TestWriterErrorCases(t *testing.T) {
 
 	err = w.WriteUint64(0, 65)
 	assert.NotNil(t, err)
+}
+
+func TestMSBFirst(t *testing.T) {
+	t.Run("ReadUint8 MSB", func(t *testing.T) {
+		// 0xAB = 10101011
+		// MSB first: reading 4 bits should give 1010 = 10
+		data := []byte{0xAB}
+		r := NewReader(data)
+		r.SetMSBFirst(true)
+		assert.True(t, r.MSBFirst())
+
+		val, err := r.ReadUint8(4)
+		require.Nil(t, err)
+		assert.Equal(t, uint8(0x0A), val) // 1010 = 10
+	})
+
+	t.Run("ReadUint8 MSB crosses byte", func(t *testing.T) {
+		// 0xAB = 10101011, 0xCD = 11001101
+		// Reading 4 bits MSB first: 1010 = 10
+		// Then reading 8 bits MSB first: 1011 1100 = 0xBC
+		data := []byte{0xAB, 0xCD}
+		r := NewReader(data)
+		r.SetMSBFirst(true)
+
+		r.ReadUint8(4) // Skip first 4 bits
+		val, err := r.ReadUint8(8)
+		require.Nil(t, err)
+		assert.Equal(t, uint8(0xBC), val)
+	})
+
+	t.Run("ReadUint16 MSB", func(t *testing.T) {
+		// 0xABCD in big-endian: AB CD
+		data := []byte{0xAB, 0xCD}
+		r := NewReader(data)
+		r.SetMSBFirst(true)
+
+		val, err := r.ReadUint16(16)
+		require.Nil(t, err)
+		assert.Equal(t, uint16(0xABCD), val)
+	})
+
+	t.Run("ReadUint16 MSB partial", func(t *testing.T) {
+		// 0xAB = 10101011
+		// Reading 12 bits MSB first from 0xAB, 0xCD
+		data := []byte{0xAB, 0xCD}
+		r := NewReader(data)
+		r.SetMSBFirst(true)
+
+		val, err := r.ReadUint16(12)
+		require.Nil(t, err)
+		assert.Equal(t, uint16(0xABC), val) // Top 12 bits
+	})
+
+	t.Run("ReadUint32 MSB", func(t *testing.T) {
+		data := []byte{0xDE, 0xAD, 0xBE, 0xEF}
+		r := NewReader(data)
+		r.SetMSBFirst(true)
+
+		val, err := r.ReadUint32(32)
+		require.Nil(t, err)
+		assert.Equal(t, uint32(0xDEADBEEF), val)
+	})
+
+	t.Run("ReadUint32 MSB partial", func(t *testing.T) {
+		data := []byte{0xDE, 0xAD, 0xBE, 0xEF, 0x12}
+		r := NewReader(data)
+		r.SetMSBFirst(true)
+
+		val, err := r.ReadUint32(24)
+		require.Nil(t, err)
+		assert.Equal(t, uint32(0xDEADBE), val)
+	})
+
+	t.Run("ReadUint64 MSB", func(t *testing.T) {
+		data := []byte{0xCA, 0xFE, 0xBA, 0xBE, 0xDE, 0xAD, 0xBE, 0xEF}
+		r := NewReader(data)
+		r.SetMSBFirst(true)
+
+		val, err := r.ReadUint64(64)
+		require.Nil(t, err)
+		assert.Equal(t, uint64(0xCAFEBABEDEADBEEF), val)
+	})
+
+	t.Run("ReadUint64 MSB various widths", func(t *testing.T) {
+		data := []byte{0xCA, 0xFE, 0xBA, 0xBE, 0xDE, 0xAD, 0xBE, 0xEF, 0x12}
+		r := NewReader(data)
+		r.SetMSBFirst(true)
+
+		// Test 8 bits
+		v1, _ := r.ReadUint64(8)
+		assert.Equal(t, uint64(0xCA), v1)
+
+		// Reset and test 16 bits
+		r.Seek(0, SeekSet)
+		v2, _ := r.ReadUint64(16)
+		assert.Equal(t, uint64(0xCAFE), v2)
+
+		// Reset and test 24 bits
+		r.Seek(0, SeekSet)
+		v3, _ := r.ReadUint64(24)
+		assert.Equal(t, uint64(0xCAFEBA), v3)
+
+		// Reset and test 32 bits
+		r.Seek(0, SeekSet)
+		v4, _ := r.ReadUint64(32)
+		assert.Equal(t, uint64(0xCAFEBABE), v4)
+
+		// Reset and test 40 bits
+		r.Seek(0, SeekSet)
+		v5, _ := r.ReadUint64(40)
+		assert.Equal(t, uint64(0xCAFEBABEDE), v5)
+
+		// Reset and test 48 bits
+		r.Seek(0, SeekSet)
+		v6, _ := r.ReadUint64(48)
+		assert.Equal(t, uint64(0xCAFEBABEDEAD), v6)
+
+		// Reset and test 56 bits
+		r.Seek(0, SeekSet)
+		v7, _ := r.ReadUint64(56)
+		assert.Equal(t, uint64(0xCAFEBABEDEADBE), v7)
+	})
+
+	t.Run("ReadUint64 MSB unaligned", func(t *testing.T) {
+		data := []byte{0xCA, 0xFE, 0xBA, 0xBE, 0xDE, 0xAD, 0xBE, 0xEF, 0x12}
+		r := NewReader(data)
+		r.SetMSBFirst(true)
+
+		// Read 4 bits first to misalign
+		r.ReadUint8(4)
+
+		// Read 64 bits - should span 9 bytes
+		val, err := r.ReadUint64(64)
+		require.Nil(t, err)
+		// After skipping top 4 bits of 0xCA, we get:
+		// A FE BA BE DE AD BE EF and top 4 bits of 0x12
+		assert.Equal(t, uint64(0xAFEBABEDEADBEEF1), val)
+	})
 }
 
 // BenchmarkRead reads bench_stream.bin (same as C++ benchmark)
@@ -614,6 +751,53 @@ func BenchmarkRead(b *testing.B) {
 
 		for i := 0; i < b.N; i++ {
 			r := NewReader(data)
+
+			for r.Remaining().TotalBits() > 64 {
+				typeTag, _ := r.ReadUint8(3)
+
+				switch typeTag {
+				case TypeUint8:
+					bitCount, _ := r.ReadUint8(4)
+					val, _ := r.ReadUint8(bitCount)
+					sink += uint64(val)
+				case TypeUint16:
+					bitCount, _ := r.ReadUint8(5)
+					val, _ := r.ReadUint16(bitCount)
+					sink += uint64(val)
+				case TypeUint32:
+					bitCount, _ := r.ReadUint8(6)
+					val, _ := r.ReadUint32(bitCount)
+					sink += uint64(val)
+				case TypeUint64:
+					bitCount, _ := r.ReadUint8(7)
+					val, _ := r.ReadUint64(bitCount)
+					sink += val
+				case TypeString:
+					s, _ := r.ReadString()
+					sink += uint64(len(s))
+				case TypeFloat32:
+					val, _ := r.ReadFloat32()
+					sink += uint64(val)
+				case TypeFloat64:
+					val, _ := r.ReadFloat64()
+					sink += uint64(val)
+				case TypeVaruint:
+					val, _ := r.ReadVarint()
+					sink += uint64(val)
+				}
+			}
+		}
+		_ = sink
+	})
+
+	b.Run("Mixed_MSB", func(b *testing.B) {
+		var sink uint64
+		b.SetBytes(int64(len(data)))
+		b.ResetTimer()
+
+		for i := 0; i < b.N; i++ {
+			r := NewReader(data)
+			r.SetMSBFirst(true)
 
 			for r.Remaining().TotalBits() > 64 {
 				typeTag, _ := r.ReadUint8(3)
