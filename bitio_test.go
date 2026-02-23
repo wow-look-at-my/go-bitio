@@ -728,6 +728,252 @@ func TestMSBFirst(t *testing.T) {
 	})
 }
 
+func TestSkip(t *testing.T) {
+	data := []byte{0x12, 0x34, 0x56, 0x78}
+	r := NewReader(data)
+
+	r.Skip(4)
+	assert.Equal(t, FromBits(4), r.Position())
+
+	r.Skip(8)
+	assert.Equal(t, FromBits(12), r.Position())
+
+	// Skip past end should clamp to end
+	r.Skip(255)
+	assert.Equal(t, r.EndPosition(), r.Position())
+}
+
+func TestPeek8(t *testing.T) {
+	t.Run("LSB full data", func(t *testing.T) {
+		data := []byte{0xAB, 0xCD}
+		r := NewReader(data)
+		// LSB mode returns left-aligned value
+		// 0xAB = 10101011, left-aligned in uint8 = 0xAB
+		val := r.Peek8()
+		assert.Equal(t, uint8(0xAB), val)
+		assert.Equal(t, BitPos(0), r.Position()) // Position unchanged
+	})
+
+	t.Run("LSB partial offset", func(t *testing.T) {
+		data := []byte{0xAB, 0xCD}
+		r := NewReader(data)
+		r.Skip(4) // Now at bit 4
+		val := r.Peek8()
+		// bits 4-7 of 0xAB (1010) + bits 0-3 of 0xCD (1101) = 1101 1010 = 0xDA
+		// But left-aligned so top 8 bits
+		assert.Equal(t, uint8(0xDA), val)
+	})
+
+	t.Run("MSB mode", func(t *testing.T) {
+		data := []byte{0xAB, 0xCD}
+		r := NewReader(data)
+		r.SetMSBFirst(true)
+		val := r.Peek8()
+		assert.Equal(t, uint8(0xAB), val)
+	})
+
+	t.Run("empty", func(t *testing.T) {
+		r := NewReader([]byte{})
+		val := r.Peek8()
+		assert.Equal(t, uint8(0), val)
+	})
+
+	t.Run("partial EOF zero-pad", func(t *testing.T) {
+		data := []byte{0xFF}
+		r := NewReader(data)
+		r.Skip(4) // Only 4 bits remaining
+		val := r.Peek8()
+		// Should get top 4 bits (1111) left-aligned with 4 zeros = 0xF0
+		assert.Equal(t, uint8(0xF0), val)
+	})
+}
+
+func TestPeek16(t *testing.T) {
+	t.Run("LSB full", func(t *testing.T) {
+		data := []byte{0xAB, 0xCD, 0xEF}
+		r := NewReader(data)
+		val := r.Peek16()
+		// Little-endian: 0xCDAB, left-aligned
+		assert.Equal(t, uint16(0xCDAB), val)
+	})
+
+	t.Run("MSB full", func(t *testing.T) {
+		data := []byte{0xAB, 0xCD, 0xEF}
+		r := NewReader(data)
+		r.SetMSBFirst(true)
+		val := r.Peek16()
+		assert.Equal(t, uint16(0xABCD), val)
+	})
+}
+
+func TestPeek32(t *testing.T) {
+	t.Run("LSB full", func(t *testing.T) {
+		data := []byte{0xEF, 0xBE, 0xAD, 0xDE, 0x12}
+		r := NewReader(data)
+		val := r.Peek32()
+		assert.Equal(t, uint32(0xDEADBEEF), val)
+	})
+
+	t.Run("MSB full", func(t *testing.T) {
+		data := []byte{0xDE, 0xAD, 0xBE, 0xEF, 0x12}
+		r := NewReader(data)
+		r.SetMSBFirst(true)
+		val := r.Peek32()
+		assert.Equal(t, uint32(0xDEADBEEF), val)
+	})
+}
+
+func TestPeek64(t *testing.T) {
+	t.Run("LSB full", func(t *testing.T) {
+		data := []byte{0xEF, 0xBE, 0xAD, 0xDE, 0xBE, 0xBA, 0xFE, 0xCA, 0x12}
+		r := NewReader(data)
+		val := r.Peek64()
+		assert.Equal(t, uint64(0xCAFEBABEDEADBEEF), val)
+	})
+
+	t.Run("MSB full", func(t *testing.T) {
+		data := []byte{0xCA, 0xFE, 0xBA, 0xBE, 0xDE, 0xAD, 0xBE, 0xEF, 0x12}
+		r := NewReader(data)
+		r.SetMSBFirst(true)
+		val := r.Peek64()
+		assert.Equal(t, uint64(0xCAFEBABEDEADBEEF), val)
+	})
+
+	t.Run("empty", func(t *testing.T) {
+		r := NewReader([]byte{})
+		val := r.Peek64()
+		assert.Equal(t, uint64(0), val)
+	})
+}
+
+func TestMustRead(t *testing.T) {
+	t.Run("MustRead8", func(t *testing.T) {
+		data := []byte{0xAB, 0xCD}
+		r := NewReader(data)
+		val := r.MustRead8(8)
+		assert.Equal(t, uint8(0xAB), val)
+		assert.Equal(t, FromBits(8), r.Position())
+	})
+
+	t.Run("MustRead16", func(t *testing.T) {
+		data := []byte{0xAB, 0xCD, 0xEF}
+		r := NewReader(data)
+		val := r.MustRead16(16)
+		assert.Equal(t, uint16(0xCDAB), val)
+		assert.Equal(t, FromBits(16), r.Position())
+	})
+
+	t.Run("MustRead32", func(t *testing.T) {
+		data := []byte{0xEF, 0xBE, 0xAD, 0xDE, 0x12}
+		r := NewReader(data)
+		val := r.MustRead32(32)
+		assert.Equal(t, uint32(0xDEADBEEF), val)
+		assert.Equal(t, FromBits(32), r.Position())
+	})
+
+	t.Run("MustRead64", func(t *testing.T) {
+		data := []byte{0xEF, 0xBE, 0xAD, 0xDE, 0xBE, 0xBA, 0xFE, 0xCA, 0x12}
+		r := NewReader(data)
+		val := r.MustRead64(64)
+		assert.Equal(t, uint64(0xCAFEBABEDEADBEEF), val)
+		assert.Equal(t, FromBits(64), r.Position())
+	})
+
+	t.Run("MustRead8 past EOF zero-pads", func(t *testing.T) {
+		data := []byte{0xFF}
+		r := NewReader(data)
+		r.Skip(4)
+		val := r.MustRead8(8) // Only 4 bits available
+		// Should read 4 bits (0xF) and return that, position advances by 4
+		assert.Equal(t, uint8(0x0F), val)
+		assert.Equal(t, r.EndPosition(), r.Position())
+	})
+
+	t.Run("MustRead bits overflow clamp", func(t *testing.T) {
+		data := []byte{0xAB}
+		r := NewReader(data)
+		val := r.MustRead8(100) // Should clamp to 8
+		assert.Equal(t, uint8(0xAB), val)
+	})
+}
+
+func TestBackwardReader(t *testing.T) {
+	t.Run("basic backward read", func(t *testing.T) {
+		data := []byte{0x12, 0x34, 0x56, 0x78}
+		r := NewBackwardReader(data)
+		assert.True(t, r.Backward())
+
+		// Position 0 = last byte (0x78)
+		val, err := r.ReadUint8(8)
+		require.Nil(t, err)
+		assert.Equal(t, uint8(0x78), val)
+
+		// Position 1 = second-to-last byte (0x56)
+		val, err = r.ReadUint8(8)
+		require.Nil(t, err)
+		assert.Equal(t, uint8(0x56), val)
+	})
+
+	t.Run("backward 16-bit read", func(t *testing.T) {
+		data := []byte{0x12, 0x34, 0x56, 0x78}
+		r := NewBackwardReader(data)
+
+		// Reading 16 bits: bytes at positions 0,1 (0x78, 0x56)
+		// Little-endian: 0x5678
+		val, err := r.ReadUint16(16)
+		require.Nil(t, err)
+		assert.Equal(t, uint16(0x5678), val)
+	})
+
+	t.Run("backward MSB mode", func(t *testing.T) {
+		data := []byte{0x12, 0x34, 0x56, 0x78}
+		r := NewBackwardReader(data)
+		r.SetMSBFirst(true)
+
+		val, err := r.ReadUint16(16)
+		require.Nil(t, err)
+		// MSB mode: 0x78 << 8 | 0x56 = 0x7856
+		assert.Equal(t, uint16(0x7856), val)
+	})
+
+	t.Run("SetBackward toggle", func(t *testing.T) {
+		data := []byte{0x12, 0x34}
+		r := NewReader(data)
+		assert.False(t, r.Backward())
+
+		r.SetBackward(true)
+		assert.True(t, r.Backward())
+
+		val, err := r.ReadUint8(8)
+		require.Nil(t, err)
+		assert.Equal(t, uint8(0x34), val) // Reads from end
+	})
+
+	t.Run("bidirectional simulation", func(t *testing.T) {
+		// Simulate two readers converging
+		data := []byte{0x11, 0x22, 0x33, 0x44}
+		fwd := NewReader(data)
+		bwd := NewBackwardReader(data)
+
+		v1, _ := fwd.ReadUint8(8)
+		v2, _ := bwd.ReadUint8(8)
+		assert.Equal(t, uint8(0x11), v1)
+		assert.Equal(t, uint8(0x44), v2)
+
+		v3, _ := fwd.ReadUint8(8)
+		v4, _ := bwd.ReadUint8(8)
+		assert.Equal(t, uint8(0x22), v3)
+		assert.Equal(t, uint8(0x33), v4)
+	})
+
+	t.Run("clone preserves backward", func(t *testing.T) {
+		r := NewBackwardReader([]byte{0x12, 0x34})
+		clone := r.Clone()
+		assert.True(t, clone.Backward())
+		assert.True(t, clone.MSBFirst() == r.MSBFirst())
+	})
+}
+
 // BenchmarkRead reads bench_stream.bin (same as C++ benchmark)
 func BenchmarkRead(b *testing.B) {
 	data, err := os.ReadFile("testdata/bench_stream.bin")
@@ -798,6 +1044,223 @@ func BenchmarkRead(b *testing.B) {
 		for i := 0; i < b.N; i++ {
 			r := NewReader(data)
 			r.SetMSBFirst(true)
+
+			for r.Remaining().TotalBits() > 64 {
+				typeTag, _ := r.ReadUint8(3)
+
+				switch typeTag {
+				case TypeUint8:
+					bitCount, _ := r.ReadUint8(4)
+					val, _ := r.ReadUint8(bitCount)
+					sink += uint64(val)
+				case TypeUint16:
+					bitCount, _ := r.ReadUint8(5)
+					val, _ := r.ReadUint16(bitCount)
+					sink += uint64(val)
+				case TypeUint32:
+					bitCount, _ := r.ReadUint8(6)
+					val, _ := r.ReadUint32(bitCount)
+					sink += uint64(val)
+				case TypeUint64:
+					bitCount, _ := r.ReadUint8(7)
+					val, _ := r.ReadUint64(bitCount)
+					sink += val
+				case TypeString:
+					s, _ := r.ReadString()
+					sink += uint64(len(s))
+				case TypeFloat32:
+					val, _ := r.ReadFloat32()
+					sink += uint64(val)
+				case TypeFloat64:
+					val, _ := r.ReadFloat64()
+					sink += uint64(val)
+				case TypeVaruint:
+					val, _ := r.ReadVarint()
+					sink += uint64(val)
+				}
+			}
+		}
+		_ = sink
+	})
+}
+
+func BenchmarkMustRead(b *testing.B) {
+	data, err := os.ReadFile("testdata/bench_stream.bin")
+	require.Nil(b, err)
+
+	const (
+		TypeUint8   = 0
+		TypeUint16  = 1
+		TypeUint32  = 2
+		TypeUint64  = 3
+		TypeString  = 4
+		TypeFloat32 = 5
+		TypeFloat64 = 6
+		TypeVaruint = 7
+	)
+
+	b.Run("Mixed", func(b *testing.B) {
+		var sink uint64
+		b.SetBytes(int64(len(data)))
+		b.ResetTimer()
+
+		for i := 0; i < b.N; i++ {
+			r := NewReader(data)
+
+			for r.Remaining().TotalBits() > 64 {
+				typeTag := r.MustRead8(3)
+
+				switch typeTag {
+				case TypeUint8:
+					bitCount := r.MustRead8(4)
+					val := r.MustRead8(bitCount)
+					sink += uint64(val)
+				case TypeUint16:
+					bitCount := r.MustRead8(5)
+					val := r.MustRead16(bitCount)
+					sink += uint64(val)
+				case TypeUint32:
+					bitCount := r.MustRead8(6)
+					val := r.MustRead32(bitCount)
+					sink += uint64(val)
+				case TypeUint64:
+					bitCount := r.MustRead8(7)
+					val := r.MustRead64(bitCount)
+					sink += val
+				case TypeString:
+					s, _ := r.ReadString()
+					sink += uint64(len(s))
+				case TypeFloat32:
+					val, _ := r.ReadFloat32()
+					sink += uint64(val)
+				case TypeFloat64:
+					val, _ := r.ReadFloat64()
+					sink += uint64(val)
+				case TypeVaruint:
+					val, _ := r.ReadVarint()
+					sink += uint64(val)
+				}
+			}
+		}
+		_ = sink
+	})
+
+	b.Run("Mixed_MSB", func(b *testing.B) {
+		var sink uint64
+		b.SetBytes(int64(len(data)))
+		b.ResetTimer()
+
+		for i := 0; i < b.N; i++ {
+			r := NewReader(data)
+			r.SetMSBFirst(true)
+
+			for r.Remaining().TotalBits() > 64 {
+				typeTag := r.MustRead8(3)
+
+				switch typeTag {
+				case TypeUint8:
+					bitCount := r.MustRead8(4)
+					val := r.MustRead8(bitCount)
+					sink += uint64(val)
+				case TypeUint16:
+					bitCount := r.MustRead8(5)
+					val := r.MustRead16(bitCount)
+					sink += uint64(val)
+				case TypeUint32:
+					bitCount := r.MustRead8(6)
+					val := r.MustRead32(bitCount)
+					sink += uint64(val)
+				case TypeUint64:
+					bitCount := r.MustRead8(7)
+					val := r.MustRead64(bitCount)
+					sink += val
+				case TypeString:
+					s, _ := r.ReadString()
+					sink += uint64(len(s))
+				case TypeFloat32:
+					val, _ := r.ReadFloat32()
+					sink += uint64(val)
+				case TypeFloat64:
+					val, _ := r.ReadFloat64()
+					sink += uint64(val)
+				case TypeVaruint:
+					val, _ := r.ReadVarint()
+					sink += uint64(val)
+				}
+			}
+		}
+		_ = sink
+	})
+}
+
+func BenchmarkBackwardRead(b *testing.B) {
+	data, err := os.ReadFile("testdata/bench_stream.bin")
+	require.Nil(b, err)
+
+	const (
+		TypeUint8   = 0
+		TypeUint16  = 1
+		TypeUint32  = 2
+		TypeUint64  = 3
+		TypeString  = 4
+		TypeFloat32 = 5
+		TypeFloat64 = 6
+		TypeVaruint = 7
+	)
+
+	b.Run("Forward", func(b *testing.B) {
+		var sink uint64
+		b.SetBytes(int64(len(data)))
+		b.ResetTimer()
+
+		for i := 0; i < b.N; i++ {
+			r := NewReader(data)
+
+			for r.Remaining().TotalBits() > 64 {
+				typeTag, _ := r.ReadUint8(3)
+
+				switch typeTag {
+				case TypeUint8:
+					bitCount, _ := r.ReadUint8(4)
+					val, _ := r.ReadUint8(bitCount)
+					sink += uint64(val)
+				case TypeUint16:
+					bitCount, _ := r.ReadUint8(5)
+					val, _ := r.ReadUint16(bitCount)
+					sink += uint64(val)
+				case TypeUint32:
+					bitCount, _ := r.ReadUint8(6)
+					val, _ := r.ReadUint32(bitCount)
+					sink += uint64(val)
+				case TypeUint64:
+					bitCount, _ := r.ReadUint8(7)
+					val, _ := r.ReadUint64(bitCount)
+					sink += val
+				case TypeString:
+					s, _ := r.ReadString()
+					sink += uint64(len(s))
+				case TypeFloat32:
+					val, _ := r.ReadFloat32()
+					sink += uint64(val)
+				case TypeFloat64:
+					val, _ := r.ReadFloat64()
+					sink += uint64(val)
+				case TypeVaruint:
+					val, _ := r.ReadVarint()
+					sink += uint64(val)
+				}
+			}
+		}
+		_ = sink
+	})
+
+	b.Run("Backward", func(b *testing.B) {
+		var sink uint64
+		b.SetBytes(int64(len(data)))
+		b.ResetTimer()
+
+		for i := 0; i < b.N; i++ {
+			r := NewBackwardReader(data)
 
 			for r.Remaining().TotalBits() > 64 {
 				typeTag, _ := r.ReadUint8(3)

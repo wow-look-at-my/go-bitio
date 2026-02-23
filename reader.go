@@ -13,6 +13,7 @@ type Reader struct {
 	pos      BitPos
 	end      BitPos
 	msbFirst bool // If true, read bits from MSB to LSB within each byte
+	backward bool // If true, traverse bytes from end toward start
 }
 
 // SetMSBFirst sets whether bits are read MSB first (true) or LSB first (false, default).
@@ -43,6 +44,28 @@ func NewReaderWithBounds(data []byte, start, end BitPos) *Reader {
 		pos:   start,
 		end:   end,
 	}
+}
+
+// NewBackwardReader creates a reader that traverses bytes end-to-start.
+// Position 0 = last byte, advances toward first byte.
+func NewBackwardReader(data []byte) *Reader {
+	return &Reader{
+		data:     data,
+		start:    0,
+		pos:      0,
+		end:      FromBytes(uint64(len(data))),
+		backward: true,
+	}
+}
+
+// SetBackward sets whether bytes are traversed backward.
+func (r *Reader) SetBackward(bwd bool) {
+	r.backward = bwd
+}
+
+// Backward returns true if reading bytes in reverse order.
+func (r *Reader) Backward() bool {
+	return r.backward
 }
 
 // Position returns the current position.
@@ -360,6 +383,13 @@ func (r *Reader) PeekUint8(bits uint8) (uint8, error) {
 	if r.pos.Add(NewSize(0, uint64(bits))) > r.end {
 		return 0, io.EOF
 	}
+	if r.backward {
+		buf := r.peekBytesZeroPad(2)
+		if r.msbFirst {
+			return readUint8MSB(buf, 0, r.pos.Bits(), bits), nil
+		}
+		return readUint8(buf, 0, r.pos.Bits(), bits), nil
+	}
 	if r.msbFirst {
 		return readUint8MSB(r.data, r.pos.Bytes(), r.pos.Bits(), bits), nil
 	}
@@ -373,6 +403,13 @@ func (r *Reader) PeekUint16(bits uint8) (uint16, error) {
 	}
 	if r.pos.Add(NewSize(0, uint64(bits))) > r.end {
 		return 0, io.EOF
+	}
+	if r.backward {
+		buf := r.peekBytesZeroPad(3)
+		if r.msbFirst {
+			return readUint16MSB(buf, 0, r.pos.Bits(), bits), nil
+		}
+		return readUint16(buf, 0, r.pos.Bits(), bits), nil
 	}
 	if r.msbFirst {
 		return readUint16MSB(r.data, r.pos.Bytes(), r.pos.Bits(), bits), nil
@@ -388,6 +425,13 @@ func (r *Reader) PeekUint32(bits uint8) (uint32, error) {
 	if r.pos.Add(NewSize(0, uint64(bits))) > r.end {
 		return 0, io.EOF
 	}
+	if r.backward {
+		buf := r.peekBytesZeroPad(5)
+		if r.msbFirst {
+			return readUint32MSB(buf, 0, r.pos.Bits(), bits), nil
+		}
+		return readUint32(buf, 0, r.pos.Bits(), bits), nil
+	}
 	if r.msbFirst {
 		return readUint32MSB(r.data, r.pos.Bytes(), r.pos.Bits(), bits), nil
 	}
@@ -401,6 +445,13 @@ func (r *Reader) PeekUint64(bits uint8) (uint64, error) {
 	}
 	if r.pos.Add(NewSize(0, uint64(bits))) > r.end {
 		return 0, io.EOF
+	}
+	if r.backward {
+		buf := r.peekBytesZeroPad(9)
+		if r.msbFirst {
+			return readUint64MSB(buf, 0, r.pos.Bits(), bits), nil
+		}
+		return readUint64(buf, 0, r.pos.Bits(), bits), nil
 	}
 	if r.msbFirst {
 		return readUint64MSB(r.data, r.pos.Bytes(), r.pos.Bits(), bits), nil
@@ -569,11 +620,282 @@ func (r *Reader) ReadVarint() (int32, error) {
 // Clone returns a copy of the reader with the same position.
 func (r *Reader) Clone() *Reader {
 	return &Reader{
-		data:  r.data,
-		start: r.start,
-		pos:   r.pos,
-		end:   r.end,
+		data:     r.data,
+		start:    r.start,
+		pos:      r.pos,
+		end:      r.end,
+		msbFirst: r.msbFirst,
+		backward: r.backward,
 	}
+}
+
+// Skip advances the position by bits without reading.
+// Simpler than Seek for the common "peek then skip" pattern.
+// If skip would go past end, position is set to end.
+func (r *Reader) Skip(bits uint8) {
+	newPos := r.pos.Add(NewSize(0, uint64(bits)))
+	if newPos > r.end {
+		newPos = r.end
+	}
+	r.pos = newPos
+}
+
+// getByte returns the byte at logical position, respecting backward mode.
+// Returns 0 for out-of-bounds access.
+func (r *Reader) getByte(logicalByte uint64) byte {
+	if logicalByte >= uint64(len(r.data)) {
+		return 0
+	}
+	if r.backward {
+		return r.data[uint64(len(r.data))-1-logicalByte]
+	}
+	return r.data[logicalByte]
+}
+
+// peekBytesZeroPad reads up to n bytes starting at current position, zero-padding if needed.
+// Respects backward mode.
+func (r *Reader) peekBytesZeroPad(n int) []byte {
+	buf := make([]byte, n)
+	byteOff := r.pos.Bytes()
+	for i := 0; i < n; i++ {
+		buf[i] = r.getByte(byteOff + uint64(i))
+	}
+	return buf
+}
+
+// Peek8 returns up to 8 bits left-aligned in a uint8, zero-padded at EOF.
+// Does not advance position. Does not return an error.
+func (r *Reader) Peek8() uint8 {
+	remaining := r.end.Diff(r.pos)
+	if remaining == 0 {
+		return 0
+	}
+	bits := uint8(8)
+	if remaining.TotalBits() < 8 {
+		bits = uint8(remaining.TotalBits())
+	}
+
+	buf := r.peekBytesZeroPad(2)
+	bitOff := r.pos.Bits()
+	var val uint8
+
+	if r.msbFirst {
+		raw := uint16(buf[0])<<8 | uint16(buf[1])
+		val = uint8(raw >> (8 - bitOff))
+	} else {
+		raw := uint16(buf[0]) | uint16(buf[1])<<8
+		val = uint8((raw >> bitOff) & 0xFF)
+		// Left-align the value
+		val <<= (8 - bits)
+	}
+
+	return val
+}
+
+// Peek16 returns up to 16 bits left-aligned in a uint16, zero-padded at EOF.
+// Does not advance position. Does not return an error.
+func (r *Reader) Peek16() uint16 {
+	remaining := r.end.Diff(r.pos)
+	if remaining == 0 {
+		return 0
+	}
+	bits := uint8(16)
+	if remaining.TotalBits() < 16 {
+		bits = uint8(remaining.TotalBits())
+	}
+
+	buf := r.peekBytesZeroPad(3)
+	bitOff := r.pos.Bits()
+	var val uint16
+
+	if r.msbFirst {
+		raw := uint32(buf[0])<<16 | uint32(buf[1])<<8 | uint32(buf[2])
+		val = uint16(raw >> (8 - bitOff))
+	} else {
+		raw := uint32(buf[0]) | uint32(buf[1])<<8 | uint32(buf[2])<<16
+		val = uint16((raw >> bitOff) & 0xFFFF)
+		// Left-align the value
+		val <<= (16 - bits)
+	}
+
+	return val
+}
+
+// Peek32 returns up to 32 bits left-aligned in a uint32, zero-padded at EOF.
+// Does not advance position. Does not return an error.
+func (r *Reader) Peek32() uint32 {
+	remaining := r.end.Diff(r.pos)
+	if remaining == 0 {
+		return 0
+	}
+	bits := uint8(32)
+	if remaining.TotalBits() < 32 {
+		bits = uint8(remaining.TotalBits())
+	}
+
+	buf := r.peekBytesZeroPad(5)
+	bitOff := r.pos.Bits()
+	var val uint32
+
+	if r.msbFirst {
+		raw := uint64(buf[0])<<32 | uint64(buf[1])<<24 | uint64(buf[2])<<16 | uint64(buf[3])<<8 | uint64(buf[4])
+		val = uint32(raw >> (8 - bitOff))
+	} else {
+		raw := uint64(buf[0]) | uint64(buf[1])<<8 | uint64(buf[2])<<16 | uint64(buf[3])<<24 | uint64(buf[4])<<32
+		val = uint32((raw >> bitOff) & 0xFFFFFFFF)
+		// Left-align the value
+		val <<= (32 - bits)
+	}
+
+	return val
+}
+
+// Peek64 returns up to 64 bits left-aligned in a uint64, zero-padded at EOF.
+// Does not advance position. Does not return an error.
+func (r *Reader) Peek64() uint64 {
+	remaining := r.end.Diff(r.pos)
+	if remaining == 0 {
+		return 0
+	}
+	bits := uint8(64)
+	if remaining.TotalBits() < 64 {
+		bits = uint8(remaining.TotalBits())
+	}
+
+	buf := r.peekBytesZeroPad(9)
+	bitOff := r.pos.Bits()
+	var val uint64
+
+	if r.msbFirst {
+		// Read 9 bytes big-endian style for MSB-first
+		hi := uint64(buf[0])<<56 | uint64(buf[1])<<48 | uint64(buf[2])<<40 | uint64(buf[3])<<32
+		lo := uint64(buf[4])<<24 | uint64(buf[5])<<16 | uint64(buf[6])<<8 | uint64(buf[7])
+		extra := uint64(buf[8])
+		raw := (hi | lo) << bitOff
+		raw |= extra >> (8 - bitOff)
+		val = raw
+	} else {
+		// Read 9 bytes little-endian style for LSB-first
+		lo := uint64(buf[0]) | uint64(buf[1])<<8 | uint64(buf[2])<<16 | uint64(buf[3])<<24
+		hi := uint64(buf[4])<<32 | uint64(buf[5])<<40 | uint64(buf[6])<<48 | uint64(buf[7])<<56
+		combined := lo | hi
+		val = combined >> bitOff
+		if bitOff > 0 {
+			val |= uint64(buf[8]) << (64 - bitOff)
+		}
+		// Left-align the value
+		val <<= (64 - bits)
+	}
+
+	return val
+}
+
+// MustRead8 reads up to 8 bits and advances position.
+// Zero-pads if insufficient data. Does not return an error.
+func (r *Reader) MustRead8(bits uint8) uint8 {
+	if bits > 8 {
+		bits = 8
+	}
+	remaining := r.end.Diff(r.pos)
+	actualBits := bits
+	if remaining.TotalBits() < uint64(bits) {
+		actualBits = uint8(remaining.TotalBits())
+	}
+
+	if actualBits == 0 {
+		return 0
+	}
+
+	var val uint8
+	if r.msbFirst {
+		val = readUint8MSB(r.peekBytesZeroPad(2), 0, r.pos.Bits(), actualBits)
+	} else {
+		val = readUint8(r.peekBytesZeroPad(2), 0, r.pos.Bits(), actualBits)
+	}
+
+	r.pos = r.pos.Add(NewSize(0, uint64(actualBits)))
+	return val
+}
+
+// MustRead16 reads up to 16 bits and advances position.
+// Zero-pads if insufficient data. Does not return an error.
+func (r *Reader) MustRead16(bits uint8) uint16 {
+	if bits > 16 {
+		bits = 16
+	}
+	remaining := r.end.Diff(r.pos)
+	actualBits := bits
+	if remaining.TotalBits() < uint64(bits) {
+		actualBits = uint8(remaining.TotalBits())
+	}
+
+	if actualBits == 0 {
+		return 0
+	}
+
+	var val uint16
+	if r.msbFirst {
+		val = readUint16MSB(r.peekBytesZeroPad(3), 0, r.pos.Bits(), actualBits)
+	} else {
+		val = readUint16(r.peekBytesZeroPad(3), 0, r.pos.Bits(), actualBits)
+	}
+
+	r.pos = r.pos.Add(NewSize(0, uint64(actualBits)))
+	return val
+}
+
+// MustRead32 reads up to 32 bits and advances position.
+// Zero-pads if insufficient data. Does not return an error.
+func (r *Reader) MustRead32(bits uint8) uint32 {
+	if bits > 32 {
+		bits = 32
+	}
+	remaining := r.end.Diff(r.pos)
+	actualBits := bits
+	if remaining.TotalBits() < uint64(bits) {
+		actualBits = uint8(remaining.TotalBits())
+	}
+
+	if actualBits == 0 {
+		return 0
+	}
+
+	var val uint32
+	if r.msbFirst {
+		val = readUint32MSB(r.peekBytesZeroPad(5), 0, r.pos.Bits(), actualBits)
+	} else {
+		val = readUint32(r.peekBytesZeroPad(5), 0, r.pos.Bits(), actualBits)
+	}
+
+	r.pos = r.pos.Add(NewSize(0, uint64(actualBits)))
+	return val
+}
+
+// MustRead64 reads up to 64 bits and advances position.
+// Zero-pads if insufficient data. Does not return an error.
+func (r *Reader) MustRead64(bits uint8) uint64 {
+	if bits > 64 {
+		bits = 64
+	}
+	remaining := r.end.Diff(r.pos)
+	actualBits := bits
+	if remaining.TotalBits() < uint64(bits) {
+		actualBits = uint8(remaining.TotalBits())
+	}
+
+	if actualBits == 0 {
+		return 0
+	}
+
+	var val uint64
+	if r.msbFirst {
+		val = readUint64MSB(r.peekBytesZeroPad(9), 0, r.pos.Bits(), actualBits)
+	} else {
+		val = readUint64(r.peekBytesZeroPad(9), 0, r.pos.Bits(), actualBits)
+	}
+
+	r.pos = r.pos.Add(NewSize(0, uint64(actualBits)))
+	return val
 }
 
 // Span returns a new reader that covers a sub-range.
