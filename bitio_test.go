@@ -1084,6 +1084,292 @@ func BenchmarkRead(b *testing.B) {
 	})
 }
 
+func TestBackward(t *testing.T) {
+	t.Run("NewBackwardReader basic", func(t *testing.T) {
+		r := NewBackwardReader([]byte{0x11, 0x22, 0x33, 0x44})
+		assert.True(t, r.Backward())
+		assert.Equal(t, BitSize(32), r.Length())
+	})
+
+	t.Run("ReadUint8 backward reads last byte first", func(t *testing.T) {
+		// data = [0x11, 0x22, 0x33, 0x44]
+		// Backward reader should see 0x44 first, then 0x33, etc.
+		data := []byte{0x11, 0x22, 0x33, 0x44}
+		r := NewBackwardReader(data)
+		r.SetMSBFirst(true)
+
+		val, err := r.ReadUint8(8)
+		require.Nil(t, err)
+		assert.Equal(t, uint8(0x44), val)
+
+		val, err = r.ReadUint8(8)
+		require.Nil(t, err)
+		assert.Equal(t, uint8(0x33), val)
+
+		val, err = r.ReadUint8(8)
+		require.Nil(t, err)
+		assert.Equal(t, uint8(0x22), val)
+
+		val, err = r.ReadUint8(8)
+		require.Nil(t, err)
+		assert.Equal(t, uint8(0x11), val)
+	})
+
+	t.Run("ReadUint8 backward partial bits", func(t *testing.T) {
+		// data = [0x11, 0xAB]
+		// 0xAB = 10101011
+		// Backward MSB reader sees 0xAB first
+		// Reading 4 bits: 1010 = 0x0A
+		// Reading 4 bits: 1011 = 0x0B
+		// Then 0x11 = 00010001
+		// Reading 4 bits: 0001 = 0x01
+		data := []byte{0x11, 0xAB}
+		r := NewBackwardReader(data)
+		r.SetMSBFirst(true)
+
+		val, err := r.ReadUint8(4)
+		require.Nil(t, err)
+		assert.Equal(t, uint8(0x0A), val)
+
+		val, err = r.ReadUint8(4)
+		require.Nil(t, err)
+		assert.Equal(t, uint8(0x0B), val)
+
+		val, err = r.ReadUint8(4)
+		require.Nil(t, err)
+		assert.Equal(t, uint8(0x01), val)
+	})
+
+	t.Run("ReadUint8 backward crosses byte boundary", func(t *testing.T) {
+		// data = [0x11, 0xAB]
+		// Backward MSB: 0xAB = 10101011, 0x11 = 00010001
+		// Read 4 bits: 1010 = 0x0A
+		// Read 8 bits crossing boundary: 1011 0001 = 0xB1
+		data := []byte{0x11, 0xAB}
+		r := NewBackwardReader(data)
+		r.SetMSBFirst(true)
+
+		r.ReadUint8(4)
+		val, err := r.ReadUint8(8)
+		require.Nil(t, err)
+		assert.Equal(t, uint8(0xB1), val)
+	})
+
+	t.Run("ReadUint16 backward", func(t *testing.T) {
+		// data = [0x11, 0x22, 0x33, 0x44]
+		// Backward reader sees bytes: 0x44, 0x33, 0x22, 0x11
+		// Reading 16 bits MSB-first: 0x4433
+		data := []byte{0x11, 0x22, 0x33, 0x44}
+		r := NewBackwardReader(data)
+		r.SetMSBFirst(true)
+
+		val, err := r.ReadUint16(16)
+		require.Nil(t, err)
+		assert.Equal(t, uint16(0x4433), val)
+	})
+
+	t.Run("ReadUint16 backward partial", func(t *testing.T) {
+		// data = [0x11, 0x22, 0x33, 0x44]
+		// Backward: 0x44 = 01000100, 0x33 = 00110011
+		// Read 12 bits MSB-first: 0100 0100 0011 = 0x443
+		data := []byte{0x11, 0x22, 0x33, 0x44}
+		r := NewBackwardReader(data)
+		r.SetMSBFirst(true)
+
+		val, err := r.ReadUint16(12)
+		require.Nil(t, err)
+		assert.Equal(t, uint16(0x443), val)
+	})
+
+	t.Run("ReadUint32 backward", func(t *testing.T) {
+		// data = [0xDE, 0xAD, 0xBE, 0xEF]
+		// Backward: 0xEF, 0xBE, 0xAD, 0xDE
+		// 32 bits MSB-first: 0xEFBEADDE
+		data := []byte{0xDE, 0xAD, 0xBE, 0xEF}
+		r := NewBackwardReader(data)
+		r.SetMSBFirst(true)
+
+		val, err := r.ReadUint32(32)
+		require.Nil(t, err)
+		assert.Equal(t, uint32(0xEFBEADDE), val)
+	})
+
+	t.Run("ReadUint32 backward partial", func(t *testing.T) {
+		data := []byte{0xDE, 0xAD, 0xBE, 0xEF, 0x12}
+		r := NewBackwardReader(data)
+		r.SetMSBFirst(true)
+
+		// Backward: 0x12, 0xEF, 0xBE, 0xAD, 0xDE
+		// 24 bits: 0x12EFBE
+		val, err := r.ReadUint32(24)
+		require.Nil(t, err)
+		assert.Equal(t, uint32(0x12EFBE), val)
+	})
+
+	t.Run("ReadUint64 backward", func(t *testing.T) {
+		data := []byte{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08}
+		r := NewBackwardReader(data)
+		r.SetMSBFirst(true)
+
+		// Backward: 0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01
+		val, err := r.ReadUint64(64)
+		require.Nil(t, err)
+		assert.Equal(t, uint64(0x0807060504030201), val)
+	})
+
+	t.Run("ReadUint64 backward various widths", func(t *testing.T) {
+		data := []byte{0xCA, 0xFE, 0xBA, 0xBE, 0xDE, 0xAD, 0xBE, 0xEF, 0x12}
+		r := NewBackwardReader(data)
+		r.SetMSBFirst(true)
+
+		// Backward byte order: 0x12, 0xEF, 0xBE, 0xAD, 0xDE, 0xBE, 0xBA, 0xFE, 0xCA
+
+		// 8 bits
+		v, _ := r.ReadUint64(8)
+		assert.Equal(t, uint64(0x12), v)
+
+		// Reset, 16 bits
+		r.Seek(0, SeekSet)
+		v, _ = r.ReadUint64(16)
+		assert.Equal(t, uint64(0x12EF), v)
+
+		// Reset, 32 bits
+		r.Seek(0, SeekSet)
+		v, _ = r.ReadUint64(32)
+		assert.Equal(t, uint64(0x12EFBEAD), v)
+
+		// Reset, 48 bits
+		r.Seek(0, SeekSet)
+		v, _ = r.ReadUint64(48)
+		assert.Equal(t, uint64(0x12EFBEADDEBE), v)
+
+		// Reset, 64 bits
+		r.Seek(0, SeekSet)
+		v, _ = r.ReadUint64(64)
+		assert.Equal(t, uint64(0x12EFBEADDEBEBAFE), v)
+	})
+
+	t.Run("Peek backward doesnt advance", func(t *testing.T) {
+		data := []byte{0x11, 0x22, 0x33, 0x44}
+		r := NewBackwardReader(data)
+		r.SetMSBFirst(true)
+
+		v1, _ := r.PeekUint8(8)
+		assert.Equal(t, uint8(0x44), v1)
+
+		v2, _ := r.PeekUint8(8)
+		assert.Equal(t, uint8(0x44), v2)
+
+		assert.Equal(t, BitPos(0), r.Position())
+	})
+
+	t.Run("Forward and backward converge", func(t *testing.T) {
+		// Simulate two readers consuming from opposite ends
+		data := []byte{0xAA, 0xBB, 0xCC, 0xDD}
+		fwd := NewReader(data)
+		fwd.SetMSBFirst(true)
+		bwd := NewBackwardReader(data)
+		bwd.SetMSBFirst(true)
+
+		// Forward reads first 2 bytes
+		fwdVal, _ := fwd.ReadUint16(16)
+		assert.Equal(t, uint16(0xAABB), fwdVal)
+
+		// Backward reads last 2 bytes
+		bwdVal, _ := bwd.ReadUint16(16)
+		assert.Equal(t, uint16(0xDDCC), bwdVal)
+
+		// They should have consumed all data together
+		fwdBits := fwd.LocalPosition().TotalBits()
+		bwdBits := bwd.LocalPosition().TotalBits()
+		totalBits := uint64(len(data)) * 8
+		assert.Equal(t, totalBits, fwdBits+bwdBits)
+	})
+
+	t.Run("Forward and backward converge at sub-byte", func(t *testing.T) {
+		// 3 bytes = 24 bits
+		data := []byte{0xAA, 0xBB, 0xCC}
+		fwd := NewReader(data)
+		fwd.SetMSBFirst(true)
+		bwd := NewBackwardReader(data)
+		bwd.SetMSBFirst(true)
+
+		// Forward reads 10 bits
+		fwd.ReadUint16(10)
+		// Backward reads 14 bits
+		bwd.ReadUint16(14)
+
+		fwdBits := fwd.LocalPosition().TotalBits()
+		bwdBits := bwd.LocalPosition().TotalBits()
+		assert.Equal(t, uint64(24), fwdBits+bwdBits)
+	})
+
+	t.Run("Clone preserves backward", func(t *testing.T) {
+		data := []byte{0x11, 0x22}
+		r := NewBackwardReader(data)
+		r.SetMSBFirst(true)
+		r.ReadUint8(4)
+
+		c := r.Clone()
+		assert.True(t, c.Backward())
+		assert.True(t, c.MSBFirst())
+		assert.Equal(t, r.Position(), c.Position())
+
+		// Reading from clone should give same results
+		vOrig, _ := r.ReadUint8(4)
+		vClone, _ := c.ReadUint8(4)
+		assert.Equal(t, vOrig, vClone)
+	})
+
+	t.Run("SetBackward", func(t *testing.T) {
+		data := []byte{0x11, 0x22}
+		r := NewReader(data)
+		assert.False(t, r.Backward())
+
+		r.SetBackward(true)
+		assert.True(t, r.Backward())
+	})
+
+	t.Run("EOF at end of backward data", func(t *testing.T) {
+		data := []byte{0xAA}
+		r := NewBackwardReader(data)
+		r.SetMSBFirst(true)
+
+		_, err := r.ReadUint8(8)
+		require.Nil(t, err)
+		assert.True(t, r.IsAtEnd())
+
+		_, err = r.ReadUint8(1)
+		assert.Error(t, err)
+	})
+
+	t.Run("Backward matches manual byte reversal", func(t *testing.T) {
+		// Verify that backward reading produces the same result as
+		// manually reversing the byte slice and reading MSB-forward.
+		data := []byte{0xCA, 0xFE, 0xBA, 0xBE, 0xDE}
+
+		// Manual reversal
+		reversed := make([]byte, len(data))
+		for i, b := range data {
+			reversed[len(data)-1-i] = b
+		}
+		fwdOnReversed := NewReader(reversed)
+		fwdOnReversed.SetMSBFirst(true)
+
+		// Native backward
+		bwd := NewBackwardReader(data)
+		bwd.SetMSBFirst(true)
+
+		// Read in various sizes and compare
+		for _, bits := range []uint8{3, 5, 8, 12, 7} {
+			v1, e1 := fwdOnReversed.ReadUint16(bits)
+			v2, e2 := bwd.ReadUint16(bits)
+			assert.Equal(t, e1, e2, "error mismatch at bits=%d", bits)
+			assert.Equal(t, v1, v2, "value mismatch at bits=%d", bits)
+		}
+	})
+}
+
 func BenchmarkMustRead(b *testing.B) {
 	data, err := os.ReadFile("testdata/bench_stream.bin")
 	require.Nil(b, err)
