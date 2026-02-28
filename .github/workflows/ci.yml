@@ -12,4 +12,4 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: wow-look-at-my/go-toolchain@latest
+      - uses: wow-look-at-my/go-toolchain@v1
