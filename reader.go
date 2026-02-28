@@ -13,7 +13,7 @@ type Reader struct {
 	pos      BitPos
 	end      BitPos
 	msbFirst bool // If true, read bits from MSB to LSB within each byte
-	reverse  bool // If true, read bytes in reverse order (last byte first) using MSB-first ordering
+	backward bool // If true, traverse bytes from end toward start
 }
 
 // SetMSBFirst sets whether bits are read MSB first (true) or LSB first (false, default).
@@ -24,21 +24,6 @@ func (r *Reader) SetMSBFirst(msb bool) {
 // MSBFirst returns true if the reader is in MSB-first mode.
 func (r *Reader) MSBFirst() bool {
 	return r.msbFirst
-}
-
-// SetReverse sets whether bytes are read in reverse order (last byte first).
-// Reverse mode always uses MSB-first bit ordering within each byte.
-// This is useful for reading entropy-coded streams from the end without copying data.
-func (r *Reader) SetReverse(reverse bool) {
-	r.reverse = reverse
-	if reverse {
-		r.msbFirst = true
-	}
-}
-
-// Reverse returns true if the reader is in reverse mode.
-func (r *Reader) Reverse() bool {
-	return r.reverse
 }
 
 // NewReader creates a new Reader from data.
@@ -61,24 +46,33 @@ func NewReaderWithBounds(data []byte, start, end BitPos) *Reader {
 	}
 }
 
-// NewReaderReverse creates a Reader that reads bytes in reverse order (last byte first)
-// using MSB-first bit ordering. The reader operates on the same underlying data without
-// copying. Logical positions advance forward (0, 1, 2, ...) but map to physical bytes
-// starting from the end of the slice.
+// NewBackwardReader creates a reader that traverses bytes end-to-start.
+// Position 0 = last byte, advances toward first byte.
+// The reader operates on the same underlying data without copying.
 //
 // This is designed for entropy-coded streams where two readers consume from opposite
-// ends of the same byte slice. The forward reader's LocalPosition plus the reverse
+// ends of the same byte slice. The forward reader's LocalPosition plus the backward
 // reader's LocalPosition should equal the total bit count when they converge.
-func NewReaderReverse(data []byte) *Reader {
+func NewBackwardReader(data []byte) *Reader {
 	return &Reader{
 		data:     data,
 		start:    0,
 		pos:      0,
 		end:      FromBytes(uint64(len(data))),
-		msbFirst: true,
-		reverse:  true,
+		backward: true,
 	}
 }
+
+// SetBackward sets whether bytes are traversed backward.
+func (r *Reader) SetBackward(bwd bool) {
+	r.backward = bwd
+}
+
+// Backward returns true if reading bytes in reverse order.
+func (r *Reader) Backward() bool {
+	return r.backward
+}
+
 
 // Position returns the current position.
 func (r *Reader) Position() BitPos {
@@ -526,8 +520,12 @@ func (r *Reader) PeekUint8(bits uint8) (uint8, error) {
 	if r.pos.Add(NewSize(0, uint64(bits))) > r.end {
 		return 0, io.EOF
 	}
-	if r.reverse {
-		return readUint8MSBReverse(r.data, r.pos.Bytes(), r.pos.Bits(), bits), nil
+	if r.backward {
+		if r.msbFirst {
+			return readUint8MSBReverse(r.data, r.pos.Bytes(), r.pos.Bits(), bits), nil
+		}
+		buf := r.peekBytesZeroPad(2)
+		return readUint8(buf, 0, r.pos.Bits(), bits), nil
 	}
 	if r.msbFirst {
 		return readUint8MSB(r.data, r.pos.Bytes(), r.pos.Bits(), bits), nil
@@ -543,8 +541,12 @@ func (r *Reader) PeekUint16(bits uint8) (uint16, error) {
 	if r.pos.Add(NewSize(0, uint64(bits))) > r.end {
 		return 0, io.EOF
 	}
-	if r.reverse {
-		return readUint16MSBReverse(r.data, r.pos.Bytes(), r.pos.Bits(), bits), nil
+	if r.backward {
+		if r.msbFirst {
+			return readUint16MSBReverse(r.data, r.pos.Bytes(), r.pos.Bits(), bits), nil
+		}
+		buf := r.peekBytesZeroPad(3)
+		return readUint16(buf, 0, r.pos.Bits(), bits), nil
 	}
 	if r.msbFirst {
 		return readUint16MSB(r.data, r.pos.Bytes(), r.pos.Bits(), bits), nil
@@ -560,8 +562,12 @@ func (r *Reader) PeekUint32(bits uint8) (uint32, error) {
 	if r.pos.Add(NewSize(0, uint64(bits))) > r.end {
 		return 0, io.EOF
 	}
-	if r.reverse {
-		return readUint32MSBReverse(r.data, r.pos.Bytes(), r.pos.Bits(), bits), nil
+	if r.backward {
+		if r.msbFirst {
+			return readUint32MSBReverse(r.data, r.pos.Bytes(), r.pos.Bits(), bits), nil
+		}
+		buf := r.peekBytesZeroPad(5)
+		return readUint32(buf, 0, r.pos.Bits(), bits), nil
 	}
 	if r.msbFirst {
 		return readUint32MSB(r.data, r.pos.Bytes(), r.pos.Bits(), bits), nil
@@ -577,8 +583,12 @@ func (r *Reader) PeekUint64(bits uint8) (uint64, error) {
 	if r.pos.Add(NewSize(0, uint64(bits))) > r.end {
 		return 0, io.EOF
 	}
-	if r.reverse {
-		return readUint64MSBReverse(r.data, r.pos.Bytes(), r.pos.Bits(), bits), nil
+	if r.backward {
+		if r.msbFirst {
+			return readUint64MSBReverse(r.data, r.pos.Bytes(), r.pos.Bits(), bits), nil
+		}
+		buf := r.peekBytesZeroPad(9)
+		return readUint64(buf, 0, r.pos.Bits(), bits), nil
 	}
 	if r.msbFirst {
 		return readUint64MSB(r.data, r.pos.Bytes(), r.pos.Bits(), bits), nil
@@ -752,9 +762,109 @@ func (r *Reader) Clone() *Reader {
 		pos:      r.pos,
 		end:      r.end,
 		msbFirst: r.msbFirst,
-		reverse:  r.reverse,
+		backward: r.backward,
 	}
 }
+
+// Skip advances the position by bits without reading.
+// Simpler than Seek for the common "peek then skip" pattern.
+// If skip would go past end, position is set to end.
+func (r *Reader) Skip(bits uint8) {
+	newPos := r.pos.Add(NewSize(0, uint64(bits)))
+	if newPos > r.end {
+		newPos = r.end
+	}
+	r.pos = newPos
+}
+
+// getByte returns the byte at logical position, respecting backward mode.
+// Returns 0 for out-of-bounds access.
+func (r *Reader) getByte(logicalByte uint64) byte {
+	if logicalByte >= uint64(len(r.data)) {
+		return 0
+	}
+	if r.backward {
+		return r.data[uint64(len(r.data))-1-logicalByte]
+	}
+	return r.data[logicalByte]
+}
+
+// peekBytesZeroPad reads up to n bytes starting at current position, zero-padding if needed.
+// Respects backward mode.
+func (r *Reader) peekBytesZeroPad(n int) []byte {
+	buf := make([]byte, n)
+	byteOff := r.pos.Bytes()
+	for i := 0; i < n; i++ {
+		buf[i] = r.getByte(byteOff + uint64(i))
+	}
+	return buf
+}
+
+// peekLeftAligned returns up to maxBits left-aligned, zero-padded at EOF.
+func (r *Reader) peekLeftAligned(maxBits uint8) uint64 {
+	remaining := r.end.Diff(r.pos)
+	if remaining == 0 {
+		return 0
+	}
+	bits := maxBits
+	if remaining.TotalBits() < uint64(maxBits) {
+		bits = uint8(remaining.TotalBits())
+	}
+	buf := r.peekBytesZeroPad(9)
+	bitOff := r.pos.Bits()
+	var val uint64
+	if r.msbFirst {
+		hi := uint64(buf[0])<<56 | uint64(buf[1])<<48 | uint64(buf[2])<<40 | uint64(buf[3])<<32
+		lo := uint64(buf[4])<<24 | uint64(buf[5])<<16 | uint64(buf[6])<<8 | uint64(buf[7])
+		val = (hi | lo) << bitOff
+		val |= uint64(buf[8]) >> (8 - bitOff)
+	} else {
+		lo := uint64(buf[0]) | uint64(buf[1])<<8 | uint64(buf[2])<<16 | uint64(buf[3])<<24
+		hi := uint64(buf[4])<<32 | uint64(buf[5])<<40 | uint64(buf[6])<<48 | uint64(buf[7])<<56
+		val = (lo | hi) >> bitOff
+		if bitOff > 0 {
+			val |= uint64(buf[8]) << (64 - bitOff)
+		}
+		val <<= (64 - bits) // left-align for LSB mode
+	}
+	return val >> (64 - maxBits)
+}
+
+// Peek8/16/32/64 return left-aligned bits, zero-padded at EOF. No position advance, no error.
+func (r *Reader) Peek8() uint8   { return uint8(r.peekLeftAligned(8)) }
+func (r *Reader) Peek16() uint16 { return uint16(r.peekLeftAligned(16)) }
+func (r *Reader) Peek32() uint32 { return uint32(r.peekLeftAligned(32)) }
+func (r *Reader) Peek64() uint64 { return r.peekLeftAligned(64) }
+
+// mustReadInternal reads up to maxBits, advances position, zero-pads at EOF.
+func (r *Reader) mustReadInternal(bits, maxBits uint8) uint64 {
+	if bits > maxBits {
+		bits = maxBits
+	}
+	remaining := r.end.Diff(r.pos)
+	if remaining == 0 {
+		return 0
+	}
+	actualBits := bits
+	if remaining.TotalBits() < uint64(bits) {
+		actualBits = uint8(remaining.TotalBits())
+	}
+	buf := r.peekBytesZeroPad(9)
+	var val uint64
+	if r.msbFirst {
+		val = readUint64MSB(buf, 0, r.pos.Bits(), actualBits)
+	} else {
+		val = readUint64(buf, 0, r.pos.Bits(), actualBits)
+	}
+	r.pos = r.pos.Add(NewSize(0, uint64(actualBits)))
+	return val
+}
+
+// MustRead8/16/32/64 read bits, advance position, zero-pad at EOF. No error return.
+func (r *Reader) MustRead8(bits uint8) uint8   { return uint8(r.mustReadInternal(bits, 8)) }
+func (r *Reader) MustRead16(bits uint8) uint16 { return uint16(r.mustReadInternal(bits, 16)) }
+func (r *Reader) MustRead32(bits uint8) uint32 { return uint32(r.mustReadInternal(bits, 32)) }
+func (r *Reader) MustRead64(bits uint8) uint64 { return r.mustReadInternal(bits, 64) }
 
 // Span returns a new reader that covers a sub-range.
 func (r *Reader) Span(start, end BitPos) (*Reader, error) {
@@ -773,7 +883,7 @@ func (r *Reader) Span(start, end BitPos) (*Reader, error) {
 		pos:      start,
 		end:      end,
 		msbFirst: r.msbFirst,
-		reverse:  r.reverse,
+		backward: r.backward,
 	}, nil
 }
 
