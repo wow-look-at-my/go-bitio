@@ -73,7 +73,6 @@ func (r *Reader) Backward() bool {
 	return r.backward
 }
 
-
 // Position returns the current position.
 func (r *Reader) Position() BitPos {
 	return r.pos

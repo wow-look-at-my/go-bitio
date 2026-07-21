@@ -3,8 +3,8 @@ package main
 import (
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/wow-look-at-my/go-bitio"
-	"github.com/wow-look-at-my/testify/assert"
 )
 
 func TestGenerateTestStream(t *testing.T) {
